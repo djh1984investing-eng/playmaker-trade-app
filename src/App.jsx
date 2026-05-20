@@ -49,10 +49,11 @@ const fmt = (v) => Number(v).toFixed(2);
 function distanceMult(pointsAway) {
   const d = Math.abs(n(pointsAway));
   if (d <= 1) return 1;
-  if (d <= 3) return 0.85;
-  if (d <= 5) return 0.65;
-  if (d <= 7) return 0.45;
-  return 0.15;
+  if (d <= 3) return 0.9;
+  if (d <= 5) return 0.78;
+  if (d <= 7) return 0.65;
+  if (d <= 10) return 0.45;
+  return 0.25;
 }
 
 function stdvMult(v) {
@@ -94,10 +95,11 @@ function lvnWidthMult(width) {
 }
 
 function grade(score) {
-  if (score >= 90) return ["A+", "Elite Setup"];
-  if (score >= 80) return ["A", "High Probability"];
-  if (score >= 70) return ["B", "Good Setup"];
-  if (score >= 60) return ["C", "Needs Confirmation"];
+  if (score >= 92) return ["A+", "Elite Setup"];
+  if (score >= 84) return ["A", "High Probability"];
+  if (score >= 74) return ["B+", "Strong Setup"];
+  if (score >= 65) return ["B", "Tradable Setup"];
+  if (score >= 55) return ["C", "Needs Confirmation"];
   return ["D", "Wait / Low Quality"];
 }
 
@@ -179,7 +181,7 @@ export default function PlaymakerSetupGrader() {
 
     liquidityOn: "No",
 
-    result: "Edge",
+    result: "Unfilled",
     maxMove: "",
     maxDrawdown: "",
     profitLoss: "",
@@ -236,40 +238,74 @@ export default function PlaymakerSetupGrader() {
 
     const active = rows.filter((r) => r.active && r.score > 0);
     const within7 = rows.filter((r) => r.active && Math.abs(r.pointsAway) <= 7).length;
-    const compression = active.length >= 5 ? 8 : active.length >= 4 ? 6 : active.length >= 3 ? 4 : active.length >= 2 ? 2 : 0;
-    const coreBonus = isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) ? 20 : isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) ? 12 : 0;
+    const compression =
+      active.length >= 7 ? 18 :
+      active.length >= 6 ? 14 :
+      active.length >= 5 ? 11 :
+      active.length >= 4 ? 8 :
+      active.length >= 3 ? 5 :
+      active.length >= 2 ? 2 :
+      0;
+    const coreBonus =
+      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) ? 32 :
+      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) ? 18 :
+      isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) ? 14 :
+      0;
     const raw = rows.reduce((sum, r) => sum + r.score, 0) + compression + coreBonus;
-    const score = Math.round(clamp((raw / 112) * 100, 0, 100));
+    const score = Math.round(clamp((raw / 82) * 100, 0, 100));
     return { rows, active, within7, compression, coreBonus, raw, score, confluences: active.length };
   }, [form, startingLevel]);
 
   const recommendations = useMemo(() => {
     const entry = n(form.tradeEntryPrice);
     const side = dirSide(form.direction);
+
+    const priorityByStop = {
+      7: ["ltfVolNode", "playMakerSignal", "fvg", "orderBlock", "rejectionBlock", "lowVolumeNode"],
+      10: ["lowVolumeNode", "playMakerSignal", "prevWeekLevel", "prevSessionSTDV", "fourHSTDV", "ltfVolNode"],
+      12: ["prevWeekLevel", "prevSessionSTDV", "fourHSTDV", "lowVolumeNode", "priorSessionSTDV", "liquidity"]
+    };
+
     const active = report.rows
       .filter((r) => r.active && r.score > 0 && r.key !== "liquidity")
-      .map((r) => ({ ...r, pullback: Math.max(0, n(r.pointsAway)) }))
-      .sort((a, b) => b.score - a.score);
+      .map((r) => ({ ...r, pullback: Math.abs(n(r.pointsAway)) }));
 
     return [7, 10, 12].map((stop) => {
-      const min = stop * 0.15;
-      const max = stop * 0.72;
-      const match = active.find((r) => Math.abs(r.pointsAway) >= min && Math.abs(r.pointsAway) <= max) || active[0];
-      const pullback = match ? Math.abs(n(match.pointsAway)) : stop * 0.38;
+      const min = stop * 0.10;
+      const max = stop * 0.85;
+
+      const ranked = active
+        .filter((r) => r.pullback >= min && r.pullback <= max)
+        .sort((a, b) => {
+          const aRank = priorityByStop[stop].indexOf(a.key);
+          const bRank = priorityByStop[stop].indexOf(b.key);
+          const ar = aRank === -1 ? 99 : aRank;
+          const br = bRank === -1 ? 99 : bRank;
+          return ar - br || b.score - a.score;
+        });
+
+      const strongest = [...active].sort((a, b) => b.score - a.score)[0];
+      const match = ranked[0] || strongest;
+      const pullback = match ? match.pullback : stop * 0.35;
       const limit = entry + side * pullback;
       const stopArea = form.direction === "Long" ? limit - stop : limit + stop;
+
       return {
         stop,
         limit,
         stopArea,
         match: match ? match.name : "Default pullback",
-        confidence: match ? (match.score >= 7 ? "Strong" : "Moderate") : "Light"
+        confidence: match ? (match.score >= 8 ? "Strong" : "Moderate") : "Light",
+        note:
+          stop === 7 ? "Tighter entry. Best near LTF Vol Node / PlayMaker." :
+          stop === 10 ? "Balanced entry. Best near LVN / PlayMaker stack." :
+          "Wider protection. Best near HTF level / STDV."
       };
     });
   }, [report.rows, form.tradeEntryPrice, form.direction]);
 
   const behavior = useMemo(() => {
-    const closed = journal.filter((j) => j.result !== "Edge");
+    const closed = journal.filter((j) => j.result !== "Edge" && j.result !== "Unfilled" && j.orderStatus !== "Unfilled");
     const wins = closed.filter((j) => j.result === "Win").length;
     const losses = closed.filter((j) => j.result === "Loss").length;
     const be = closed.filter((j) => j.result === "BE").length;
@@ -290,8 +326,9 @@ export default function PlaymakerSetupGrader() {
     if (startingLevel) t.push("Starting level selected. All other starting-level toggles are locked to prevent mixed anchors.");
     if (isYes(form.ltfVolNodeOn)) t.push("LTF volume node is active: use it to pinpoint the entry suggestion.");
     if (form.orderBlockState === "Fresh" && form.orderBlockTF === "5m") t.push("Fresh low timeframe OB should stay lower weight because the turn can happen before the block fully builds.");
+    if (journal.some((j) => j.pendingOrder || j.result === "Edge" || j.orderStatus === "Unfilled")) t.push("You have unfilled orders showing on the front screen. Review them before market close or market open.");
     return t;
-  }, [form, startingLevel, report.coreBonus]);
+  }, [form, startingLevel, report.coreBonus, journal]);
 
   const handleImageUpload = (e) => {
     const files = Array.from(e.target.files || []);
@@ -350,7 +387,9 @@ export default function PlaymakerSetupGrader() {
       entry: form.tradeEntryPrice,
       grade: grade(report.score)[0],
       score: report.score,
-      result: form.result,
+      result: form.result === "Edge" || form.result === "Unfilled" ? "Unfilled" : form.result,
+      orderStatus: form.result === "Edge" || form.result === "Unfilled" ? "Unfilled" : "Reported",
+      pendingOrder: form.result === "Edge" || form.result === "Unfilled",
       maxMove: form.maxMove,
       maxDrawdown: form.maxDrawdown,
       profitLoss: form.profitLoss,
@@ -370,8 +409,10 @@ export default function PlaymakerSetupGrader() {
   };
 
   const [letter, text] = grade(report.score);
+  const unfilledOrders = journal.filter((j) => j.pendingOrder || j.result === "Edge" || j.result === "Unfilled" || j.orderStatus === "Unfilled");
 
   return (
+    <WhopGate>
     <div className="min-h-screen bg-[#080808] text-white">
       <div className="mx-auto max-w-[1500px] p-4 md:p-6">
         <div className="grid gap-5 lg:grid-cols-[1fr_325px]">
@@ -397,6 +438,27 @@ export default function PlaymakerSetupGrader() {
           <Dash label="Core Setup Bonus" value={`+${report.coreBonus}`} />
           <Dash label="Behavior Score" value={`${behavior.score}/10`} />
         </div>
+
+        {unfilledOrders.length > 0 && (
+          <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Unfilled Orders</div>
+                <p className="mt-1 text-sm text-zinc-400">These are saved trades that have not been reported yet. Check them before market close/open.</p>
+              </div>
+              <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review Orders</button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {unfilledOrders.map((order) => (
+                <div key={order.id} className="rounded-2xl border border-[#2c2300] bg-[#090909] p-4">
+                  <div className="text-xl font-black text-[#00d27a]">{order.direction}: {Number(order.entry).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  <div className="mt-1 text-sm text-zinc-400">Grade {order.grade} • {order.score}/100</div>
+                  <div className="mt-1 text-xs text-zinc-500">{order.date} • {order.top || "No top confluence saved"}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
           <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
@@ -527,6 +589,7 @@ export default function PlaymakerSetupGrader() {
         {tab === "journal" && <Journal journal={journal} saveTrade={saveTrade} editTrade={editTrade} form={form} set={set} editingId={editingId} handleImageUpload={handleImageUpload} />}
       </div>
     </div>
+    </WhopGate>
   );
 }
 
@@ -573,7 +636,7 @@ function Conf({ title, base, active, onActive, sub, children }) {
 }
 
 function Rec({ r }) {
-  return <div className="rounded-2xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between"><div className="text-lg font-black text-[#ffcc19]">{r.stop}pt Stop</div><div className="rounded-full bg-[#00d27a] px-3 py-1 text-xs font-black text-black">{r.confidence}</div></div><div className="mt-3 grid grid-cols-2 gap-3"><Small label="Limit" value={fmt(r.limit)} /><Small label="Stop" value={fmt(r.stopArea)} /></div><p className="mt-3 text-sm text-zinc-400">Based on: {r.match}</p></div>;
+  return <div className="rounded-2xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between"><div className="text-lg font-black text-[#ffcc19]">{r.stop}pt Stop</div><div className="rounded-full bg-[#00d27a] px-3 py-1 text-xs font-black text-black">{r.confidence}</div></div><div className="mt-3 grid grid-cols-2 gap-3"><Small label="Limit" value={fmt(r.limit)} /><Small label="Stop" value={fmt(r.stopArea)} /></div><p className="mt-3 text-sm text-zinc-400">Based on: {r.match}</p>{r.note && <p className="mt-1 text-xs text-zinc-500">{r.note}</p>}</div>;
 }
 
 function Small({ label, value }) {
@@ -585,7 +648,7 @@ function Breakdown({ report, recommendations, tips }) {
 }
 
 function Journal({ journal, saveTrade, editTrade, form, set, editingId, handleImageUpload }) {
-  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Edge"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId ? "Update Report" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
+  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId ? "Update Report" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
 }
 
 function Behavior({ behavior, journal }) {
