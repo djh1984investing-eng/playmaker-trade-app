@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-
+import WhopGate from "./components/WhopGate";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 
