@@ -49,11 +49,11 @@ const fmt = (v) => Number(v).toFixed(2);
 function distanceMult(pointsAway) {
   const d = Math.abs(n(pointsAway));
   if (d <= 1) return 1;
-  if (d <= 3) return 0.9;
+  if (d <= 3) return 0.92;
   if (d <= 5) return 0.78;
-  if (d <= 7) return 0.65;
-  if (d <= 10) return 0.45;
-  return 0.25;
+  if (d <= 7) return 0.55;
+  if (d <= 10) return 0.28;
+  return 0.12;
 }
 
 function stdvMult(v) {
@@ -237,23 +237,82 @@ export default function PlaymakerSetupGrader() {
     add("liquidity", "Liquidity", baseWeights.liquidity, isYes(form.liquidityOn), 0, 1, "Yes/no liquidity context.");
 
     const active = rows.filter((r) => r.active && r.score > 0);
+    const within3 = rows.filter((r) => r.active && Math.abs(r.pointsAway) <= 3).length;
+    const within5 = rows.filter((r) => r.active && Math.abs(r.pointsAway) <= 5).length;
     const within7 = rows.filter((r) => r.active && Math.abs(r.pointsAway) <= 7).length;
+    const farCount = rows.filter((r) => r.active && Math.abs(r.pointsAway) >= 8).length;
+    const topWeighted = [...active].sort((a, b) => b.base - a.base || b.score - a.score).slice(0, 3);
+    const topWithin3 = topWeighted.filter((r) => Math.abs(r.pointsAway) <= 3).length;
+    const topWithin5 = topWeighted.filter((r) => Math.abs(r.pointsAway) <= 5).length;
+    const topFar = topWeighted.filter((r) => Math.abs(r.pointsAway) >= 8).length;
+
     const compression =
-      active.length >= 7 ? 18 :
-      active.length >= 6 ? 14 :
-      active.length >= 5 ? 11 :
-      active.length >= 4 ? 8 :
-      active.length >= 3 ? 5 :
-      active.length >= 2 ? 2 :
+      within5 >= 5 ? 14 :
+      within5 >= 4 ? 11 :
+      within5 >= 3 ? 8 :
+      within7 >= 4 ? 5 :
+      within7 >= 3 ? 3 :
+      active.length >= 2 ? 1 :
       0;
+
+    const coreStackAligned =
+      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) &&
+      Math.abs(away("prevWeekLevel")) <= 5 &&
+      Math.abs(n(form.lowVolumeNodeAway)) <= 5 &&
+      Math.abs(away("playMakerSignal")) <= 5;
+
+    const coreStackTight =
+      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) &&
+      Math.abs(away("prevWeekLevel")) <= 3 &&
+      Math.abs(n(form.lowVolumeNodeAway)) <= 3 &&
+      Math.abs(away("playMakerSignal")) <= 3;
+
     const coreBonus =
-      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) ? 32 :
-      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) ? 18 :
-      isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) ? 14 :
+      coreStackTight ? 28 :
+      coreStackAligned ? 22 :
+      isYes(form.prevWeekLevelOn) && isYes(form.lowVolumeNodeOn) ? 12 :
+      isYes(form.lowVolumeNodeOn) && isYes(form.playMakerSignalOn) ? 10 :
       0;
+
     const raw = rows.reduce((sum, r) => sum + r.score, 0) + compression + coreBonus;
-    const score = Math.round(clamp((raw / 82) * 100, 0, 100));
-    return { rows, active, within7, compression, coreBonus, raw, score, confluences: active.length };
+    const zoneScore = Math.round(clamp((raw / 82) * 100, 0, 100));
+
+    let precisionScore = zoneScore;
+    if (topWithin3 === 3) precisionScore += 10;
+    else if (topWithin5 === 3) precisionScore += 5;
+    else if (topWithin5 >= 2) precisionScore += 1;
+    else precisionScore -= 10;
+
+    if (topWithin3 === 3 && active.length >= 3) precisionScore = Math.max(precisionScore, 92);
+    else if (topWithin5 === 3 && active.length >= 3) precisionScore = Math.max(precisionScore, 84);
+
+    if (topWithin3 < 3) precisionScore = Math.min(precisionScore, 91);
+    if (topFar >= 2) precisionScore = Math.min(precisionScore, 74);
+    if (farCount >= 4) precisionScore = Math.min(precisionScore, 74);
+    else if (farCount >= 3 && topWithin5 < 3) precisionScore = Math.min(precisionScore, 82);
+    if (active.length >= 6 && topWithin5 < 2) precisionScore = Math.min(precisionScore, 76);
+
+    const score = Math.round(clamp(precisionScore, 0, 100));
+
+    return {
+      rows,
+      active,
+      within3,
+      within5,
+      within7,
+      farCount,
+      topWeighted,
+      topWithin3,
+      topWithin5,
+      topFar,
+      compression,
+      coreBonus,
+      raw,
+      zoneScore,
+      precisionScore: score,
+      score,
+      confluences: active.length
+    };
   }, [form, startingLevel]);
 
   const recommendations = useMemo(() => {
@@ -268,7 +327,7 @@ export default function PlaymakerSetupGrader() {
 
     const active = report.rows
       .filter((r) => r.active && r.score > 0 && r.key !== "liquidity")
-      .map((r) => ({ ...r, pullback: Math.abs(n(r.pointsAway)) }));
+      .map((r) => ({ ...r, pullback: Math.abs(n(r.pointsAway)), signedPullback: n(r.pointsAway) }));
 
     return [7, 10, 12].map((stop) => {
       const min = stop * 0.10;
@@ -286,8 +345,8 @@ export default function PlaymakerSetupGrader() {
 
       const strongest = [...active].sort((a, b) => b.score - a.score)[0];
       const match = ranked[0] || strongest;
-      const pullback = match ? match.pullback : stop * 0.35;
-      const limit = entry + side * pullback;
+      const signedPullback = match ? match.signedPullback : side * (stop * 0.35);
+      const limit = entry + signedPullback;
       const stopArea = form.direction === "Long" ? limit - stop : limit + stop;
 
       return {
@@ -349,6 +408,8 @@ export default function PlaymakerSetupGrader() {
     const payload = {
       exportedAt: new Date().toLocaleString(),
       grade: grade(report.score)[0],
+      precisionScore: report.score,
+      zoneScore: report.zoneScore,
       score: report.score,
       tradeInfo: {
         entryPrice: form.tradeEntryPrice,
@@ -433,10 +494,29 @@ export default function PlaymakerSetupGrader() {
 
         <div className="mt-7 grid gap-5 md:grid-cols-5">
           <Dash label="Confluences" value={report.confluences} />
-          <Dash label="Within 7 Points" value={report.within7} />
-          <Dash label="Compression Bonus" value={`+${report.compression}`} />
-          <Dash label="Core Setup Bonus" value={`+${report.coreBonus}`} />
+          <Dash label="Within 5 Points" value={report.within5} />
+          <Dash label="Zone Score" value={`${report.zoneScore}/100`} />
+          <Dash label="Precision Score" value={`${report.score}/100`} />
           <Dash label="Behavior Score" value={`${behavior.score}/10`} />
+        </div>
+
+        <div className="mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ACTIVE TRADE ANCHOR</div>
+              <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              <div className="mt-1 text-sm text-zinc-400">Starting Level: {startingLevel || "None selected"} • Top 3 within 5 pts: {report.topWithin5}/3 • Far levels: {report.farCount}</div>
+            </div>
+            <div className="grid gap-2 text-sm text-zinc-300 md:grid-cols-3">
+              {recommendations.map((r) => (
+                <div key={r.stop} className="rounded-xl border border-zinc-800 bg-[#090909] p-3">
+                  <div className="font-black text-[#ffcc19]">{r.stop}pt Stop</div>
+                  <div>Limit: {Number(r.limit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  <div>Stop: {Number(r.stopArea).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         {unfilledOrders.length > 0 && (
@@ -644,7 +724,7 @@ function Small({ label, value }) {
 }
 
 function Breakdown({ report, recommendations, tips }) {
-  return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
+  return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-4"><Small label="Zone Score" value={`${report.zoneScore}/100`} /><Small label="Precision Grade Score" value={`${report.score}/100`} /><Small label="Top 3 Within 5" value={`${report.topWithin5}/3`} /><Small label="Far Levels 8+" value={report.farCount} /></div><div className="mt-4 rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-sm text-zinc-300">Raw points still count the reaction zone. The grade is capped by entry precision: top-weighted confluences need to align within 3–5 points for A/A+.</div><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
 }
 
 function Journal({ journal, saveTrade, editTrade, form, set, editingId, handleImageUpload }) {
