@@ -113,6 +113,12 @@ export default function PlaymakerSetupGrader() {
   const [journal, setJournal] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [startingLevel, setStartingLevel] = useState("playMakerSignal");
+  const [aiSettings, setAiSettings] = useState({
+    volumeCraterTop: "",
+    volumeCraterBottom: "",
+    weeklyLevelPrice: "",
+    autoUseIndicator: "Yes"
+  });
   const [form, setForm] = useState({
     tradeEntryPrice: "21450",
     direction: "Long",
@@ -201,6 +207,22 @@ export default function PlaymakerSetupGrader() {
   const away = (key) => (startingLevel === key ? 0 : n(form[`${key}Away`]));
   const canStart = (key) => startingOptions.includes(key);
   const startDisabled = (key) => startingLevel && startingLevel !== key;
+
+  const aiCraterSize = Math.abs(n(aiSettings.volumeCraterTop) - n(aiSettings.volumeCraterBottom));
+  const aiCraterMid = aiSettings.volumeCraterTop && aiSettings.volumeCraterBottom
+    ? (n(aiSettings.volumeCraterTop) + n(aiSettings.volumeCraterBottom)) / 2
+    : 0;
+  const aiCraterAway = aiCraterMid ? Math.abs(aiCraterMid - n(form.tradeEntryPrice)) : 0;
+  const aiWeeklyAway = aiSettings.weeklyLevelPrice ? Math.abs(n(aiSettings.weeklyLevelPrice) - n(form.tradeEntryPrice)) : 0;
+
+  const aiChecklist = [
+    { item: "Volume crater top", value: aiSettings.volumeCraterTop, needed: "Top of manually drawn crater box" },
+    { item: "Volume crater bottom", value: aiSettings.volumeCraterBottom, needed: "Bottom of manually drawn crater box" },
+    { item: "Crater size", value: aiCraterSize ? fmt(aiCraterSize) : "", needed: "Used by AI weighting" },
+    { item: "Weekly level price", value: aiSettings.weeklyLevelPrice, needed: "Manual weekly level for AI setup checks" },
+    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from levels" },
+    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with manual AI levels" }
+  ];
 
   const report = useMemo(() => {
     const rows = [];
@@ -441,7 +463,7 @@ export default function PlaymakerSetupGrader() {
 
   const printSetup = () => window.print();
 
-  const saveTrade = () => {
+  const saveTrade = async () => {
     const item = {
       id: editingId || Date.now(),
       date: new Date().toLocaleDateString(),
@@ -459,6 +481,31 @@ export default function PlaymakerSetupGrader() {
       tradeImages: form.tradeImages,
       top: report.active.slice(0, 4).map((r) => r.name).join(", ")
     };
+    const { error } = await supabase.from("trade_journal").insert([
+  {
+    user_id: "djh1984investing-eng",
+    symbol: "NQ",
+    direction: item.direction,
+    entry_price: Number(item.entry),
+    grade: item.grade,
+    score: item.score,
+    zone_score: report.zoneScore || report.score,
+    precision_score: report.precisionScore || report.score,
+    result: item.result,
+    max_move: Number(item.maxMove) || null,
+    max_drawdown: Number(item.maxDrawdown) || null,
+    profit_loss: Number(item.profitLoss) || null,
+    notes: item.notes,
+    confluences: report.active,
+    recommendations,
+    screenshots: item.tradeImages || []
+  }
+]);
+
+if (error) {
+  console.error("Supabase save error:", error);
+  alert("Trade saved locally, but database save failed.");
+}
     setJournal((j) => editingId ? j.map((x) => x.id === editingId ? item : x) : [item, ...j]);
     setEditingId(null);
   };
@@ -542,9 +589,10 @@ export default function PlaymakerSetupGrader() {
         )}
 
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
+            <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
@@ -662,6 +710,46 @@ export default function PlaymakerSetupGrader() {
             </Conf>
 
             <Conf title="Liquidity" base="8" active={form.liquidityOn} onActive={(v) => set("liquidityOn", v)} sub="Yes / No only" />
+          </div>
+        )}
+
+        {tab === "settings" && (
+          <div className="mt-6 grid gap-5 lg:grid-cols-2">
+            <Card>
+              <Title>AI Auto Setup Settings</Title>
+              <p className="mt-2 text-zinc-400">These inputs are for the AI auto setup engine only. They do not replace the manual checklist fields.</p>
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <Field label="Volume Crater Top Price" value={aiSettings.volumeCraterTop} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterTop: v }))} />
+                <Field label="Volume Crater Bottom Price" value={aiSettings.volumeCraterBottom} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterBottom: v }))} />
+                <Field label="Weekly Level Price" value={aiSettings.weeklyLevelPrice} onChange={(v) => setAiSettings((s) => ({ ...s, weeklyLevelPrice: v }))} />
+                <Select label="Use Indicator Auto Signals" value={aiSettings.autoUseIndicator} options={["Yes", "No"]} onChange={(v) => setAiSettings((s) => ({ ...s, autoUseIndicator: v }))} />
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <Small label="Crater Size" value={aiCraterSize ? fmt(aiCraterSize) : "--"} />
+                <Small label="Crater Mid Away" value={aiCraterAway ? fmt(aiCraterAway) : "--"} />
+                <Small label="Weekly Away" value={aiWeeklyAway ? fmt(aiWeeklyAway) : "--"} />
+              </div>
+            </Card>
+
+            <Card>
+              <Title>AI Setup Checklist Chart</Title>
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="text-zinc-400">
+                    <tr><th className="p-3">Needed</th><th>Current Value</th><th>Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {aiChecklist.map((row) => (
+                      <tr key={row.item} className="border-t border-zinc-800">
+                        <td className="p-3"><b>{row.item}</b><div className="text-xs text-zinc-500">{row.needed}</div></td>
+                        <td>{row.value || "--"}</td>
+                        <td className={row.value ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{row.value ? "Ready" : "Needed"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
           </div>
         )}
 
