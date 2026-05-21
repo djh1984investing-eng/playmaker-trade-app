@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import WhopGate from "./components/WhopGate";
+import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 
