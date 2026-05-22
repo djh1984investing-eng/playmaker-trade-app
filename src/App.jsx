@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
@@ -111,8 +111,17 @@ function dirSide(direction) {
 export default function PlaymakerSetupGrader() {
   const [tab, setTab] = useState("checklist");
   const [journal, setJournal] = useState([]);
+  const [aiSignals, setAiSignals] = useState([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiFetchMessage, setAiFetchMessage] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [startingLevel, setStartingLevel] = useState("playMakerSignal");
+  const [aiSettings, setAiSettings] = useState({
+    volumeCraterTop: "",
+    volumeCraterBottom: "",
+    weeklyLevelPrice: "",
+    autoUseIndicator: "Yes"
+  });
   const [form, setForm] = useState({
     tradeEntryPrice: "21450",
     direction: "Long",
@@ -201,6 +210,114 @@ export default function PlaymakerSetupGrader() {
   const away = (key) => (startingLevel === key ? 0 : n(form[`${key}Away`]));
   const canStart = (key) => startingOptions.includes(key);
   const startDisabled = (key) => startingLevel && startingLevel !== key;
+
+  const aiCraterSize = Math.abs(n(aiSettings.volumeCraterTop) - n(aiSettings.volumeCraterBottom));
+  const aiCraterMid = aiSettings.volumeCraterTop && aiSettings.volumeCraterBottom
+    ? (n(aiSettings.volumeCraterTop) + n(aiSettings.volumeCraterBottom)) / 2
+    : 0;
+  const aiCraterAway = aiCraterMid ? Math.abs(aiCraterMid - n(form.tradeEntryPrice)) : 0;
+  const aiWeeklyAway = aiSettings.weeklyLevelPrice ? Math.abs(n(aiSettings.weeklyLevelPrice) - n(form.tradeEntryPrice)) : 0;
+
+  const aiChecklist = [
+    { item: "Volume crater top", value: aiSettings.volumeCraterTop, needed: "Top of manually drawn crater box" },
+    { item: "Volume crater bottom", value: aiSettings.volumeCraterBottom, needed: "Bottom of manually drawn crater box" },
+    { item: "Crater size", value: aiCraterSize ? fmt(aiCraterSize) : "", needed: "Used by AI weighting" },
+    { item: "Weekly level price", value: aiSettings.weeklyLevelPrice, needed: "Manual weekly level for AI setup checks" },
+    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from levels" },
+    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with manual AI levels" }
+  ];
+
+  const fetchAiSignals = async () => {
+    setAiLoading(true);
+    setAiFetchMessage("");
+    const { data, error } = await supabase
+      .from("ai_signals")
+      .select("*")
+      .eq("user_id", "djh1984investing-eng")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("AI signal fetch error:", error);
+      setAiFetchMessage("AI fetch failed. Check Supabase table/settings.");
+    } else {
+      setAiSignals(data || []);
+      setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} AI signals.` : "No AI signals found yet.");
+    }
+    setAiLoading(false);
+  };
+
+  useEffect(() => {
+    const fetchSavedJournal = async () => {
+      const { data, error } = await supabase
+        .from("trade_journal")
+        .select("*")
+        .eq("user_id", "djh1984investing-eng")
+        .order("created_at", { ascending: false });
+
+      if (!error && data) {
+        setJournal(data.map((row) => ({
+          id: row.id || Date.now(),
+          date: row.created_at ? new Date(row.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+          direction: row.direction || "",
+          entry: row.entry_price || "",
+          grade: row.grade || "",
+          score: row.score || 0,
+          result: row.result || "Unfilled",
+          orderStatus: row.result === "Unfilled" ? "Unfilled" : "Reported",
+          pendingOrder: row.result === "Unfilled",
+          maxMove: row.max_move || "",
+          maxDrawdown: row.max_drawdown || "",
+          profitLoss: row.profit_loss || "",
+          notes: row.notes || "",
+          tradeImages: row.screenshots || [],
+          top: Array.isArray(row.confluences) ? row.confluences.map((r) => r.name).join(", ") : "",
+          signal_id: row.signal_id || row.ai_signal_id || ""
+        })));
+      }
+    };
+
+    fetchSavedJournal();
+    fetchAiSignals();
+  }, []);
+
+  const submitAiSettings = async () => {
+    const { error } = await supabase.from("ai_manual_inputs").insert([
+      {
+        user_id: "djh1984investing-eng",
+        volume_crater_top: aiSettings.volumeCraterTop ? Number(aiSettings.volumeCraterTop) : null,
+        volume_crater_bottom: aiSettings.volumeCraterBottom ? Number(aiSettings.volumeCraterBottom) : null,
+        weekly_level_price: aiSettings.weeklyLevelPrice ? Number(aiSettings.weeklyLevelPrice) : null,
+        auto_use_indicator: aiSettings.autoUseIndicator === "Yes",
+        created_at: new Date().toISOString()
+      }
+    ]);
+
+    if (error) {
+      console.error("AI settings save error:", error);
+      alert("AI settings did not save. Check Supabase table ai_manual_inputs.");
+    } else {
+      alert("AI settings saved.");
+    }
+  };
+
+  const isRecentSignal = (createdAt) => {
+    if (!createdAt) return false;
+    const diffDays = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
+    return diffDays <= 7;
+  };
+
+  const signalHasJournal = (signal) => {
+    const signalId = String(signal.id || "");
+    const signalName = String(signal.signal || "").toLowerCase();
+    return journal.some((j) => {
+      const journalSignalId = String(j.signal_id || j.ai_signal_id || "");
+      const journalNotes = String(j.notes || "").toLowerCase();
+      const journalTop = String(j.top || "").toLowerCase();
+      return (signalId && journalSignalId === signalId) || (signalName && (journalNotes.includes(signalName) || journalTop.includes(signalName)));
+    });
+  };
+
+  const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
   const report = useMemo(() => {
     const rows = [];
@@ -460,30 +577,31 @@ export default function PlaymakerSetupGrader() {
       top: report.active.slice(0, 4).map((r) => r.name).join(", ")
     };
     const { error } = await supabase.from("trade_journal").insert([
-  {
-    user_id: "djh1984investing-eng",
-    symbol: "NQ",
-    direction: item.direction,
-    entry_price: Number(item.entry),
-    grade: item.grade,
-    score: item.score,
-    zone_score: report.zoneScore || report.score,
-    precision_score: report.precisionScore || report.score,
-    result: item.result,
-    max_move: Number(item.maxMove) || null,
-    max_drawdown: Number(item.maxDrawdown) || null,
-    profit_loss: Number(item.profitLoss) || null,
-    notes: item.notes,
-    confluences: report.active,
-    recommendations,
-    screenshots: item.tradeImages || []
-  }
-]);
+      {
+        user_id: "djh1984investing-eng",
+        symbol: "NQ",
+        direction: item.direction,
+        entry_price: Number(item.entry),
+        grade: item.grade,
+        score: item.score,
+        zone_score: report.zoneScore || report.score,
+        precision_score: report.precisionScore || report.score,
+        result: item.result,
+        max_move: Number(item.maxMove) || null,
+        max_drawdown: Number(item.maxDrawdown) || null,
+        profit_loss: Number(item.profitLoss) || null,
+        notes: item.notes,
+        confluences: report.active,
+        recommendations,
+        screenshots: item.tradeImages || []
+      }
+    ]);
 
-if (error) {
-  console.error("Supabase save error:", error);
-  alert("Trade saved locally, but database save failed.");
-}
+    if (error) {
+      console.error("Supabase save error:", error);
+      alert("Trade saved locally, but database save failed.");
+    }
+
     setJournal((j) => editingId ? j.map((x) => x.id === editingId ? item : x) : [item, ...j]);
     setEditingId(null);
   };
@@ -502,18 +620,18 @@ if (error) {
     <WhopGate>
     <div className="min-h-screen bg-[#080808] text-white">
       <div className="mx-auto max-w-[1500px] p-4 md:p-6">
-        <div className="grid gap-5 lg:grid-cols-[1fr_325px]">
+        <div className="grid gap-5 lg:grid-cols-[1fr_230px]">
           <div>
             <div className="mb-5 text-[#ffcc19] font-black tracking-[0.24em] text-sm">♕ THE PLAYMAKER</div>
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
           </div>
-          <div className="rounded-3xl border border-[#2c2300] bg-black p-7 shadow-xl shadow-black/50">
+          <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
             <div className="flex items-start gap-5">
-              <div className="text-7xl font-black text-[#00e68a]">{letter}</div>
+              <div className="text-5xl font-black text-[#00e68a]">{letter}</div>
               <div className="mt-2 rounded-full bg-[#00d27a] px-5 py-2 text-sm font-black text-black">{report.score}/100</div>
             </div>
-            <div className="mt-2 text-2xl text-zinc-200">{text}</div>
+            <div className="mt-1 text-lg text-zinc-200">{text}</div>
             <div className="mt-4 h-2 rounded-full bg-zinc-900"><div className="h-full rounded-full bg-[#00d27a]" style={{width: `${report.score}%`}} /></div>
           </div>
         </div>
@@ -566,10 +684,32 @@ if (error) {
           </div>
         )}
 
+        {unfilledAiSignals.length > 0 && (
+          <div className="fixed bottom-4 right-4 z-50 max-h-[420px] w-[310px] overflow-y-auto rounded-2xl border border-[#ffcc19] bg-black/95 p-4 shadow-xl shadow-black/60">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-black uppercase tracking-[0.22em] text-[#ffcc19]">Unfilled AI Signals</div>
+                <div className="mt-1 text-sm text-zinc-400">No journal/report matched yet.</div>
+              </div>
+              <div className="rounded-full bg-[#ffcc19] px-3 py-1 text-sm font-black text-black">{unfilledAiSignals.length}</div>
+            </div>
+            <div className="mt-3 space-y-2">
+              {unfilledAiSignals.slice(0, 8).map((signal) => (
+                <div key={signal.id || `${signal.signal}-${signal.created_at}`} className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-sm">
+                  <div className="font-black text-[#00d27a]">{signal.signal || "AI_SIGNAL"}</div>
+                  <div className="mt-1 text-xs text-zinc-400">{signal.ticker || "NQ"} • {signal.price || "--"} • {signal.interval || "--"}</div>
+                  <div className="mt-1 text-xs text-zinc-500">{signal.created_at ? new Date(signal.created_at).toLocaleString() : "No time"}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
+            <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
@@ -687,6 +827,68 @@ if (error) {
             </Conf>
 
             <Conf title="Liquidity" base="8" active={form.liquidityOn} onActive={(v) => set("liquidityOn", v)} sub="Yes / No only" />
+          </div>
+        )}
+
+        {tab === "settings" && (
+          <div className="mt-6 grid gap-5 lg:grid-cols-2">
+            <Card>
+              <Title>AI Auto Setup Settings</Title>
+              <p className="mt-2 text-zinc-400">Enter manual crater and weekly levels so the AI can remember important historical zones and combine them with webhook signals.</p>
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <Field label="Volume Crater Top Price" value={aiSettings.volumeCraterTop} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterTop: v }))} />
+                <Field label="Volume Crater Bottom Price" value={aiSettings.volumeCraterBottom} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterBottom: v }))} />
+                <Field label="Weekly Level Price" value={aiSettings.weeklyLevelPrice} onChange={(v) => setAiSettings((s) => ({ ...s, weeklyLevelPrice: v }))} />
+                <Select label="Use Indicator Auto Signals" value={aiSettings.autoUseIndicator} options={["Yes", "No"]} onChange={(v) => setAiSettings((s) => ({ ...s, autoUseIndicator: v }))} />
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <Small label="Crater Size" value={aiCraterSize ? fmt(aiCraterSize) : "--"} />
+                <Small label="Crater Mid Away" value={aiCraterAway ? fmt(aiCraterAway) : "--"} />
+                <Small label="Weekly Away" value={aiWeeklyAway ? fmt(aiWeeklyAway) : "--"} />
+              </div>
+              <button onClick={submitAiSettings} className="mt-5 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Submit AI Settings</button>
+            </Card>
+
+            <Card>
+              <Title>AI Setup Checklist Chart</Title>
+              <div className="mt-5 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="text-zinc-400">
+                    <tr><th className="p-3">Needed</th><th>Current Value</th><th>Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {aiChecklist.map((row) => (
+                      <tr key={row.item} className="border-t border-zinc-800">
+                        <td className="p-3"><b>{row.item}</b><div className="text-xs text-zinc-500">{row.needed}</div></td>
+                        <td>{row.value || "--"}</td>
+                        <td className={row.value ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{row.value ? "Ready" : "Needed"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <Title>AI Signal Memory</Title>
+                <button onClick={fetchAiSignals} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">{aiLoading ? "Fetching..." : "Fetch AI Entries"}</button>
+              </div>
+              {aiFetchMessage && <div className="mt-3 text-sm text-zinc-400">{aiFetchMessage}</div>}
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {aiSignals.length === 0 && <div className="text-zinc-500">No AI signals found yet.</div>}
+                {aiSignals.map((signal) => (
+                  <div key={signal.id || `${signal.signal}-${signal.created_at}`} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <b className="text-[#ffcc19]">{signal.signal || "AI_SIGNAL"}</b>
+                      <span className={`rounded-full px-3 py-1 text-xs font-black ${isRecentSignal(signal.created_at) ? "bg-[#00d27a] text-black" : "bg-zinc-800 text-zinc-400"}`}>{isRecentSignal(signal.created_at) ? "Recent" : "Historical"}</span>
+                    </div>
+                    <div className="mt-2 text-sm text-zinc-400">{signal.ticker || "NQ"} • {signal.price || "--"} • {signal.interval || "--"}</div>
+                    <div className="mt-1 text-xs text-zinc-500">{signal.created_at ? new Date(signal.created_at).toLocaleString() : "No time"}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
           </div>
         )}
 
