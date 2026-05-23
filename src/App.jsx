@@ -116,6 +116,47 @@ export default function PlaymakerSetupGrader() {
 const [authEmail, setAuthEmail] = useState("");
 const [authPassword, setAuthPassword] = useState("");
 const [authMessage, setAuthMessage] = useState("");
+const signUp = async () => {
+  const { error } = await supabase.auth.signUp({
+    email: authEmail,
+    password: authPassword
+  });
+
+  setAuthMessage(
+    error ? error.message : "Check your email to confirm account."
+  );
+};
+
+const signIn = async () => {
+  const { error } = await supabase.auth.signInWithPassword({
+    email: authEmail,
+    password: authPassword
+  });
+
+  setAuthMessage(
+    error ? error.message : "Logged in."
+  );
+};
+
+const signOut = async () => {
+  await supabase.auth.signOut();
+};
+
+useEffect(() => {
+  supabase.auth.getSession().then(({ data }) => {
+    setUser(data.session?.user || null);
+  });
+
+  const {
+    data: { subscription }
+  } = supabase.auth.onAuthStateChange(
+    (_event, session) => {
+      setUser(session?.user || null);
+    }
+  );
+
+  return () => subscription?.unsubscribe();
+}, []);
   const [aiSignals, setAiSignals] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiFetchMessage, setAiFetchMessage] = useState("");
