@@ -68,7 +68,7 @@ export default function WhopGate({ children }) {
         </p>
 
         <a
-          href="https://whop.com"
+          href="https://whop.com/mr-djharrison/playmaker-trade-setup-rating"
           target="_blank"
           rel="noreferrer"
           style={{
