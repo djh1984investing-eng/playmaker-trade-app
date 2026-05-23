@@ -569,6 +569,47 @@ useEffect(() => {
     });
   };
 
+const exportJournalCSV = () => {
+  const headers = [
+    "Date",
+    "Direction",
+    "Entry",
+    "Grade",
+    "Score",
+    "Result",
+    "Max Move",
+    "Max Drawdown",
+    "Profit/Loss",
+    "Notes"
+  ];
+
+  const rows = journal.map((j) => [
+    j.date || "",
+    j.direction || "",
+    j.entry || "",
+    j.grade || "",
+    j.score || "",
+    j.result || "",
+    j.maxMove || "",
+    j.maxDrawdown || "",
+    j.profitLoss || "",
+   JSON.stringify(j.notes || "")
+  ]);
+
+  const csv = [
+  headers.join(","),
+  ...rows.map((r) => r.join(","))
+].join("\n");
+  const blob = new Blob([csv], {
+    type: "text/csv"
+  });
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `playmaker-journal-${Date.now()}.csv`;
+  link.click();
+};
+
   const exportSetup = () => {
     const payload = {
       exportedAt: new Date().toLocaleString(),
