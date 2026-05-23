@@ -111,6 +111,11 @@ function dirSide(direction) {
 export default function PlaymakerSetupGrader() {
   const [tab, setTab] = useState("checklist");
   const [journal, setJournal] = useState([]);
+
+  const [user, setUser] = useState(null);
+const [authEmail, setAuthEmail] = useState("");
+const [authPassword, setAuthPassword] = useState("");
+const [authMessage, setAuthMessage] = useState("");
   const [aiSignals, setAiSignals] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiFetchMessage, setAiFetchMessage] = useState("");
@@ -248,13 +253,13 @@ export default function PlaymakerSetupGrader() {
 
   useEffect(() => {
     const fetchSavedJournal = async () => {
+      if (!user) return;
       const { data, error } = await supabase
         .from("trade_journal")
         .select("*")
-        .eq("user_id", "djh1984investing-eng")
+        .eq("user_id", user.id)
         .order("created_at", { ascending: false });
-
-      if (!error && data) {
+        if (!error && data) {
         setJournal(data.map((row) => ({
           id: row.id || Date.now(),
           date: row.created_at ? new Date(row.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
@@ -276,9 +281,10 @@ export default function PlaymakerSetupGrader() {
       }
     };
 
+        
     fetchSavedJournal();
     fetchAiSignals();
-  }, []);
+  }, [user]);
 
   const submitAiSettings = async () => {
     const { error } = await supabase.from("ai_manual_inputs").insert([
@@ -559,6 +565,10 @@ export default function PlaymakerSetupGrader() {
   const printSetup = () => window.print();
 
   const saveTrade = async () => {
+    if (!user) {
+  alert("Please log in before saving a trade.");
+  return;
+}
     const item = {
       id: editingId || Date.now(),
       date: new Date().toLocaleDateString(),
@@ -578,7 +588,7 @@ export default function PlaymakerSetupGrader() {
     };
     const { error } = await supabase.from("trade_journal").insert([
       {
-        user_id: "djh1984investing-eng",
+        user_id: user.id,
         symbol: "NQ",
         direction: item.direction,
         entry_price: Number(item.entry),
@@ -615,6 +625,59 @@ export default function PlaymakerSetupGrader() {
 
   const [letter, text] = grade(report.score);
   const unfilledOrders = journal.filter((j) => j.pendingOrder || j.result === "Edge" || j.result === "Unfilled" || j.orderStatus === "Unfilled");
+
+  if (!user) {
+  return (
+    <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="w-full max-w-md p-6 rounded-xl border border-yellow-500 bg-[#080808]">
+
+        <h1 className="text-3xl font-bold text-[#ffcc19] mb-4">
+          PlayMaker Login
+        </h1>
+
+        <input
+          type="email"
+          placeholder="Email"
+          value={authEmail}
+          onChange={(e)=>setAuthEmail(e.target.value)}
+          className="w-full p-3 mb-3 rounded bg-zinc-900"
+        />
+
+        <input
+          type="password"
+          placeholder="Password"
+          value={authPassword}
+          onChange={(e)=>setAuthPassword(e.target.value)}
+          className="w-full p-3 mb-4 rounded bg-zinc-900"
+        />
+
+        <div className="flex gap-3">
+
+          <button
+            onClick={signIn}
+            className="flex-1 bg-[#ffcc19] text-black font-bold p-3 rounded"
+          >
+            Login
+          </button>
+
+          <button
+            onClick={signUp}
+            className="flex-1 border border-[#ffcc19] p-3 rounded"
+          >
+            Register
+          </button>
+
+        </div>
+
+        <p className="mt-4 text-sm text-zinc-400">
+          {authMessage}
+        </p>
+
+      </div>
+    </div>
+  );
+}
+
 
   return (
     <WhopGate>
