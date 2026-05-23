@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 export default function WhopGate({ children }) {
   const [loading, setLoading] = useState(true);
-  const [allowed, setAllowed] = useState(false);
+  const [allowed, setAllowed] = useState(true);
 
   useEffect(() => {
     async function checkAccess() {
