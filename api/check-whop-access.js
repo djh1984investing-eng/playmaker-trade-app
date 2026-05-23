@@ -1,9 +1,3 @@
-import Whop from "@whop/sdk";
-
-const client = new Whop({
-  apiKey: process.env.WHOP_API_KEY,
-});
-
 export default async function handler(req, res) {
   try {
     const token = req.headers["x-whop-user-token"];
@@ -16,14 +10,15 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({
-      ok: true
+      ok: true,
+      reason: "Whop token received",
     });
+  } catch (error) {
+    console.error("Whop access error:", error);
 
-  } catch (err) {
-    console.error(err);
-
-    return res.status(401).json({
-      ok:false
+    return res.status(500).json({
+      ok: false,
+      reason: "Whop access check failed",
     });
   }
 }
