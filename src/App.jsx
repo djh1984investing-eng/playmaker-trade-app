@@ -697,13 +697,26 @@ const exportJournalCSV = () => {
     setJournal((j) => editingId ? j.map((x) => x.id === editingId ? item : x) : [item, ...j]);
     setEditingId(null);
   };
+    setForm((prev) => ({
+  ...prev,
+  result: "Unfilled",
+  maxMove: "",
+  maxDrawdown: "",
+  profitLoss: "",
+  notes: "",
+  tradeImages: []
+}));
 
+alert("Trade saved to journal.");
+setTab("journal");
+
+};
   const editTrade = (item) => {
     setEditingId(item.id);
     setForm((f) => ({ ...f, direction: item.direction, tradeEntryPrice: item.entry, result: item.result, maxMove: item.maxMove, maxDrawdown: item.maxDrawdown, profitLoss: item.profitLoss, notes: item.notes,
       tradeImages: item.tradeImages || [] })) ;
     setTab("checklist");
-  };
+
 
   const [letter, text] = grade(report.score);
   const unfilledOrders = journal.filter((j) => j.pendingOrder || j.result === "Edge" || j.result === "Unfilled" || j.orderStatus === "Unfilled");
