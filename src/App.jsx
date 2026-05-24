@@ -43,6 +43,22 @@ const n = (v, f = 0) => {
   const x = Number(v);
   return Number.isFinite(x) ? x : f;
 };
+
+const parseNumericInput = (value) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const cleaned = String(value ?? "")
+    .replace(/[$,\s]/g, "")
+    .trim();
+  if (!cleaned) return null;
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const fmtMaybe = (value, fallback = "--") => {
+  const parsed = parseNumericInput(value);
+  return parsed === null || parsed <= 0 ? fallback : parsed.toFixed(2);
+};
+
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const isYes = (v) => v === "Yes";
 const fmt = (v) => Number(v).toFixed(2);
@@ -281,26 +297,41 @@ useEffect(() => {
   const weeklyLevels = aiLevels.filter((level) => level.level_type === "weekly_level");
   const craterBoxes = aiLevels.filter((level) => level.level_type === "crater_box");
 
-  const nearestWeeklyLevel = useMemo(() => {
-    const entry = n(form.tradeEntryPrice);
-    if (!entry || weeklyLevels.length === 0) return null;
+  const validWeeklyLevels = weeklyLevels.filter((level) => {
+    const price = parseNumericInput(level.price);
+    return price !== null && price > 0;
+  });
 
-    return [...weeklyLevels]
-      .map((level) => ({
-        ...level,
-        distance: Math.abs(n(level.price) - entry)
-      }))
+  const validCraterBoxes = craterBoxes.filter((box) => {
+    const top = parseNumericInput(box.top_price);
+    const bottom = parseNumericInput(box.bottom_price);
+    return top !== null && bottom !== null && top > 0 && bottom > 0 && top !== bottom;
+  });
+
+  const nearestWeeklyLevel = useMemo(() => {
+    const entry = parseNumericInput(form.tradeEntryPrice);
+    if (!entry || validWeeklyLevels.length === 0) return null;
+
+    return [...validWeeklyLevels]
+      .map((level) => {
+        const price = parseNumericInput(level.price);
+        return {
+          ...level,
+          price,
+          distance: Math.abs(price - entry)
+        };
+      })
       .sort((a, b) => a.distance - b.distance)[0];
-  }, [weeklyLevels, form.tradeEntryPrice]);
+  }, [validWeeklyLevels, form.tradeEntryPrice]);
 
   const nearestCraterBox = useMemo(() => {
-    const entry = n(form.tradeEntryPrice);
-    if (!entry || craterBoxes.length === 0) return null;
+    const entry = parseNumericInput(form.tradeEntryPrice);
+    if (!entry || validCraterBoxes.length === 0) return null;
 
-    return [...craterBoxes]
+    return [...validCraterBoxes]
       .map((box) => {
-        const top = n(box.top_price);
-        const bottom = n(box.bottom_price);
+        const top = parseNumericInput(box.top_price);
+        const bottom = parseNumericInput(box.bottom_price);
         const high = Math.max(top, bottom);
         const low = Math.min(top, bottom);
         const mid = (high + low) / 2;
@@ -317,11 +348,11 @@ useEffect(() => {
         };
       })
       .sort((a, b) => a.distance - b.distance)[0];
-  }, [craterBoxes, form.tradeEntryPrice]);
+  }, [validCraterBoxes, form.tradeEntryPrice]);
 
   const aiChecklist = [
-    { item: "Weekly levels saved", value: weeklyLevels.length ? `${weeklyLevels.length} levels` : "", needed: "Multiple weekly levels that update week-to-week" },
-    { item: "Crater boxes saved", value: craterBoxes.length ? `${craterBoxes.length} boxes` : "", needed: "Multiple crater zones for AI pillar zones" },
+    { item: "Weekly levels saved", value: validWeeklyLevels.length ? `${validWeeklyLevels.length} valid levels` : "", needed: "Multiple weekly levels that update week-to-week" },
+    { item: "Crater boxes saved", value: validCraterBoxes.length ? `${validCraterBoxes.length} valid boxes` : "", needed: "Multiple crater zones for AI pillar zones" },
     { item: "Nearest weekly level", value: nearestWeeklyLevel ? `${nearestWeeklyLevel.name || "Weekly"}: ${fmt(nearestWeeklyLevel.price)} (${fmt(nearestWeeklyLevel.distance)} pts away)` : "", needed: "AI uses closest weekly pillar" },
     { item: "Nearest crater box", value: nearestCraterBox ? `${nearestCraterBox.name || "Crater"}: ${fmt(nearestCraterBox.low)}-${fmt(nearestCraterBox.high)} (${nearestCraterBox.inside ? "inside" : `${fmt(nearestCraterBox.distance)} pts away`})` : "", needed: "AI uses closest crater pillar" },
     { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from saved pillar zones" },
@@ -370,16 +401,18 @@ useEffect(() => {
       return;
     }
 
-    if (!weeklyLevelForm.price) {
-      alert("Enter a weekly level price first.");
+    const price = parseNumericInput(weeklyLevelForm.price);
+
+    if (price === null || price <= 0) {
+      alert("Enter a valid weekly level price. Example: 21480 or 21,480");
       return;
     }
 
     const payload = {
       user_id: user.id,
       level_type: "weekly_level",
-      name: weeklyLevelForm.name || "Weekly Level",
-      price: Number(weeklyLevelForm.price),
+      name: weeklyLevelForm.name.trim() || "Weekly Level",
+      price,
       top_price: null,
       bottom_price: null
     };
@@ -406,18 +439,26 @@ useEffect(() => {
       return;
     }
 
-    if (!craterBoxForm.top || !craterBoxForm.bottom) {
-      alert("Enter both crater top and crater bottom.");
+    const top = parseNumericInput(craterBoxForm.top);
+    const bottom = parseNumericInput(craterBoxForm.bottom);
+
+    if (top === null || bottom === null || top <= 0 || bottom <= 0) {
+      alert("Enter valid crater top and bottom prices. Example: 21485 and 21455");
+      return;
+    }
+
+    if (top === bottom) {
+      alert("Crater top and bottom cannot be the same price.");
       return;
     }
 
     const payload = {
       user_id: user.id,
       level_type: "crater_box",
-      name: craterBoxForm.name || "Crater Box",
+      name: craterBoxForm.name.trim() || "Crater Box",
       price: null,
-      top_price: Number(craterBoxForm.top),
-      bottom_price: Number(craterBoxForm.bottom)
+      top_price: top,
+      bottom_price: bottom
     };
 
     const { data, error } = await supabase
@@ -1323,7 +1364,7 @@ const exportJournalCSV = () => {
               <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ACTIVE TRADE ANCHOR</div>
               <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
               <div className="mt-1 text-sm text-zinc-400">Starting Level: {startingLevel || "None selected"} • Top 3 within 5 pts: {report.topWithin5}/3 • Far levels: {report.farCount}</div>
-              <div className="mt-2 text-xs text-zinc-500">AI pillars: {weeklyLevels.length} weekly levels • {craterBoxes.length} crater boxes</div>
+              <div className="mt-2 text-xs text-zinc-500">AI pillars: {validWeeklyLevels.length} weekly levels • {validCraterBoxes.length} crater boxes</div>
             </div>
             <div className="grid gap-2 text-sm text-zinc-300 md:grid-cols-3">
               {recommendations.map((r) => (
@@ -1521,8 +1562,8 @@ const exportJournalCSV = () => {
               </div>
 
               <div className="mt-5 grid gap-3 md:grid-cols-3">
-                <Small label="Weekly Levels" value={weeklyLevels.length} />
-                <Small label="Crater Boxes" value={craterBoxes.length} />
+                <Small label="Weekly Levels" value={validWeeklyLevels.length} />
+                <Small label="Crater Boxes" value={validCraterBoxes.length} />
                 <Small label="Auto Signals" value={aiSettings.autoUseIndicator} />
               </div>
 
@@ -1564,7 +1605,7 @@ const exportJournalCSV = () => {
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <b className="text-[#ffcc19]">{level.name || "Weekly Level"}</b>
-                            <div className="mt-1 text-sm text-zinc-300">Price: {fmt(level.price)}</div>
+                            <div className="mt-1 text-sm text-zinc-300">Price: {fmtMaybe(level.price)}</div>
                             <div className="mt-1 text-xs text-zinc-500">{level.created_at ? new Date(level.created_at).toLocaleDateString() : ""}</div>
                           </div>
                           <button onClick={() => deleteAiLevel(level.id)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30">Delete</button>
@@ -1579,16 +1620,17 @@ const exportJournalCSV = () => {
                   <div className="space-y-3">
                     {craterBoxes.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No crater boxes saved yet.</div>}
                     {craterBoxes.map((box) => {
-                      const top = n(box.top_price);
-                      const bottom = n(box.bottom_price);
-                      const width = Math.abs(top - bottom);
+                      const top = parseNumericInput(box.top_price);
+                      const bottom = parseNumericInput(box.bottom_price);
+                      const validBox = top !== null && bottom !== null && top > 0 && bottom > 0 && top !== bottom;
+                      const width = validBox ? Math.abs(top - bottom) : null;
                       return (
                         <div key={box.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <b className="text-[#ffcc19]">{box.name || "Crater Box"}</b>
-                              <div className="mt-1 text-sm text-zinc-300">Top: {fmt(top)} • Bottom: {fmt(bottom)}</div>
-                              <div className="mt-1 text-xs text-zinc-500">Width: {fmt(width)} pts • {box.created_at ? new Date(box.created_at).toLocaleDateString() : ""}</div>
+                              <div className="mt-1 text-sm text-zinc-300">Top: {validBox ? fmt(top) : "--"} • Bottom: {validBox ? fmt(bottom) : "--"}</div>
+                              <div className="mt-1 text-xs text-zinc-500">Width: {validBox ? `${fmt(width)} pts` : "Invalid saved values"} • {box.created_at ? new Date(box.created_at).toLocaleDateString() : ""}</div>
                             </div>
                             <button onClick={() => deleteAiLevel(box.id)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30">Delete</button>
                           </div>
