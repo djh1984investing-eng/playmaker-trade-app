@@ -108,67 +108,8 @@ function dirSide(direction) {
   return direction === "Long" ? -1 : 1;
 }
 
-export default function PlaymakerSetupGrader() {
-  const [tab, setTab] = useState("checklist");
-  const [journal, setJournal] = useState([]);
 
-  const [user, setUser] = useState(null);
-const [authEmail, setAuthEmail] = useState("");
-const [authPassword, setAuthPassword] = useState("");
-const [authMessage, setAuthMessage] = useState("");
-const signUp = async () => {
-  const { error } = await supabase.auth.signUp({
-    email: authEmail,
-    password: authPassword
-  });
-
-  setAuthMessage(
-    error ? error.message : "Check your email to confirm account."
-  );
-};
-
-const signIn = async () => {
-  const { error } = await supabase.auth.signInWithPassword({
-    email: authEmail,
-    password: authPassword
-  });
-
-  setAuthMessage(
-    error ? error.message : "Logged in."
-  );
-};
-
-const signOut = async () => {
-  await supabase.auth.signOut();
-};
-
-useEffect(() => {
-  supabase.auth.getSession().then(({ data }) => {
-    setUser(data.session?.user || null);
-  });
-
-  const {
-    data: { subscription }
-  } = supabase.auth.onAuthStateChange(
-    (_event, session) => {
-      setUser(session?.user || null);
-    }
-  );
-
-  return () => subscription?.unsubscribe();
-}, []);
-  const [aiSignals, setAiSignals] = useState([]);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiFetchMessage, setAiFetchMessage] = useState("");
-  const [editingId, setEditingId] = useState(null);
-  const [startingLevel, setStartingLevel] = useState("playMakerSignal");
-  const [aiSettings, setAiSettings] = useState({
-    volumeCraterTop: "",
-    volumeCraterBottom: "",
-    weeklyLevelPrice: "",
-    autoUseIndicator: "Yes"
-  });
-  const [form, setForm] = useState({
+const getDefaultForm = () => ({
     tradeEntryPrice: "21450",
     direction: "Long",
     bias1H: "Bullish",
@@ -245,6 +186,69 @@ useEffect(() => {
     tradeImages: []
   });
 
+export default function PlaymakerSetupGrader() {
+  const [tab, setTab] = useState("checklist");
+  const [journal, setJournal] = useState([]);
+
+  const [user, setUser] = useState(null);
+const [authEmail, setAuthEmail] = useState("");
+const [authPassword, setAuthPassword] = useState("");
+const [authMessage, setAuthMessage] = useState("");
+const signUp = async () => {
+  const { error } = await supabase.auth.signUp({
+    email: authEmail,
+    password: authPassword
+  });
+
+  setAuthMessage(
+    error ? error.message : "Check your email to confirm account."
+  );
+};
+
+const signIn = async () => {
+  const { error } = await supabase.auth.signInWithPassword({
+    email: authEmail,
+    password: authPassword
+  });
+
+  setAuthMessage(
+    error ? error.message : "Logged in."
+  );
+};
+
+const signOut = async () => {
+  await supabase.auth.signOut();
+};
+
+useEffect(() => {
+  supabase.auth.getSession().then(({ data }) => {
+    setUser(data.session?.user || null);
+  });
+
+  const {
+    data: { subscription }
+  } = supabase.auth.onAuthStateChange(
+    (_event, session) => {
+      setUser(session?.user || null);
+    }
+  );
+
+  return () => subscription?.unsubscribe();
+}, []);
+  const [aiSignals, setAiSignals] = useState([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiFetchMessage, setAiFetchMessage] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [selectedTrade, setSelectedTrade] = useState(null);
+  const [startingLevel, setStartingLevel] = useState("playMakerSignal");
+  const [aiSettings, setAiSettings] = useState({
+    volumeCraterTop: "",
+    volumeCraterBottom: "",
+    weeklyLevelPrice: "",
+    autoUseIndicator: "Yes"
+  });
+  const [form, setForm] = useState(getDefaultForm());
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const setStart = (key) => {
@@ -317,7 +321,9 @@ useEffect(() => {
           notes: row.notes || "",
           tradeImages: row.screenshots || [],
           top: Array.isArray(row.confluences) ? row.confluences.map((r) => r.name).join(", ") : "",
-          signal_id: row.signal_id || row.ai_signal_id || ""
+          signal_id: row.signal_id || row.ai_signal_id || "",
+          sourceType: row.notes?.includes("AI Signal:") ? "AI Signal" : "Manual Order",
+          formSnapshot: null
         })));
       }
     };
@@ -646,91 +652,270 @@ const exportJournalCSV = () => {
 
   const printSetup = () => window.print();
 
-  const saveTrade = async () => {
-    if (!user) {
-      alert("Please log in before saving a trade.");
-      return;
-    }
+  const makeJournalItem = (resultOverride = form.result, extra = {}) => {
+    const normalizedResult = resultOverride === "Edge" || resultOverride === "Unfilled" ? "Unfilled" : resultOverride;
+    const sourceType = extra.sourceType || selectedTrade?.sourceType || "Manual Order";
+    const signalName = extra.signalName || selectedTrade?.signalName || selectedTrade?.signal || "";
+    const baseNotes = form.notes || "";
+    const notes =
+      sourceType === "AI Signal" && signalName && !baseNotes.includes(`AI Signal: ${signalName}`)
+        ? `AI Signal: ${signalName}${baseNotes ? ` — ${baseNotes}` : ""}`
+        : baseNotes;
 
-    const item = {
-      id: editingId || Date.now(),
+    return {
+      id: extra.id || selectedTrade?.id || editingId || Date.now(),
       date: new Date().toLocaleDateString(),
       direction: form.direction,
       entry: form.tradeEntryPrice,
       grade: grade(report.score)[0],
       score: report.score,
-      result: form.result === "Edge" || form.result === "Unfilled" ? "Unfilled" : form.result,
-      orderStatus: form.result === "Edge" || form.result === "Unfilled" ? "Unfilled" : "Reported",
-      pendingOrder: form.result === "Edge" || form.result === "Unfilled",
+      result: normalizedResult,
+      orderStatus: normalizedResult === "Unfilled" ? "Unfilled" : "Reported",
+      pendingOrder: normalizedResult === "Unfilled",
       maxMove: form.maxMove,
       maxDrawdown: form.maxDrawdown,
       profitLoss: form.profitLoss,
-      notes: form.notes,
+      notes,
       tradeImages: form.tradeImages,
-      top: report.active.slice(0, 4).map((r) => r.name).join(", ")
+      top: report.active.slice(0, 4).map((r) => r.name).join(", "),
+      sourceType,
+      signal_id: extra.signal_id || selectedTrade?.signal_id || "",
+      signalName,
+      formSnapshot: { ...form }
     };
+  };
 
-    const { error } = await supabase.from("trade_journal").insert([
-      {
-        user_id: user.id,
-        symbol: "NQ",
-        direction: item.direction,
-        entry_price: Number(item.entry),
-        grade: item.grade,
-        score: item.score,
-        zone_score: report.zoneScore || report.score,
-        precision_score: report.precisionScore || report.score,
-        result: item.result,
-        max_move: Number(item.maxMove) || null,
-        max_drawdown: Number(item.maxDrawdown) || null,
-        profit_loss: Number(item.profitLoss) || null,
-        notes: item.notes,
-        confluences: report.active,
-        recommendations,
-        screenshots: item.tradeImages || []
-      }
-    ]);
+  const tradePayload = (item) => ({
+    user_id: user.id,
+    symbol: "NQ",
+    direction: item.direction,
+    entry_price: Number(item.entry) || null,
+    grade: item.grade,
+    score: item.score,
+    zone_score: report.zoneScore || report.score,
+    precision_score: report.precisionScore || report.score,
+    result: item.result,
+    max_move: Number(item.maxMove) || null,
+    max_drawdown: Number(item.maxDrawdown) || null,
+    profit_loss: Number(item.profitLoss) || null,
+    notes: item.notes,
+    confluences: report.active,
+    recommendations,
+    screenshots: item.tradeImages || []
+  });
 
-    if (error) {
-      console.error("Supabase save error:", error);
-      alert("Trade saved locally, but database save failed.");
+  const clearTradeForm = () => {
+    const next = getDefaultForm();
+    next.tradeEntryPrice = "";
+    next.prevWeekLevelOn = "No";
+    next.lowVolumeNodeOn = "No";
+    next.playMakerSignalOn = "No";
+    next.prevSessionSTDVOn = "No";
+    next.priorSessionSTDVOn = "No";
+    next.oneHSTDVOn = "No";
+    next.fourHSTDVOn = "No";
+    next.retrace15mOn = "No";
+    next.retrace1HOn = "No";
+    next.retrace4HOn = "No";
+    next.orderBlockOn = "No";
+    next.rejectionBlockOn = "No";
+    next.fvgOn = "No";
+    next.prevHighLowOn = "No";
+    next.ltfVolNodeOn = "No";
+    next.liquidityOn = "No";
+    next.result = "Unfilled";
+    next.maxMove = "";
+    next.maxDrawdown = "";
+    next.profitLoss = "";
+    next.notes = "";
+    next.tradeImages = [];
+
+    setForm(next);
+    setStartingLevel("");
+    setSelectedTrade(null);
+    setEditingId(null);
+  };
+
+  const saveTradeToDatabase = async (item, updateExisting = false) => {
+    if (!user) {
+      alert("Please log in before saving a trade.");
+      return item;
     }
 
-    setJournal((j) => editingId ? j.map((x) => x.id === editingId ? item : x) : [item, ...j]);
-    setEditingId(null);
+    let savedItem = item;
 
-    setForm((prev) => ({
-      ...prev,
+    if (updateExisting && item.id && selectedTrade?.sourceType !== "AI Signal") {
+      const { error } = await supabase
+        .from("trade_journal")
+        .update(tradePayload(item))
+        .eq("id", item.id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Supabase update error:", error);
+        alert("Trade updated locally, but database update failed.");
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("trade_journal")
+        .insert([tradePayload(item)])
+        .select("id, created_at")
+        .single();
+
+      if (error) {
+        console.error("Supabase save error:", error);
+        alert("Trade saved locally, but database save failed.");
+      } else if (data?.id) {
+        savedItem = {
+          ...item,
+          id: data.id,
+          date: data.created_at ? new Date(data.created_at).toLocaleDateString() : item.date
+        };
+      }
+    }
+
+    return savedItem;
+  };
+
+  const submitOrder = async () => {
+    const item = makeJournalItem("Unfilled", { sourceType: "Manual Order" });
+    const savedItem = await saveTradeToDatabase(item, false);
+
+    setJournal((j) => [savedItem, ...j]);
+    clearTradeForm();
+    setTab("trade");
+    console.log("Order submitted to active anchors");
+  };
+
+  const saveTrade = async () => {
+    const item = makeJournalItem(form.result);
+    const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
+    const savedItem = await saveTradeToDatabase(item, isReportingExisting);
+
+    setJournal((j) => {
+      const withoutOld = j.filter((x) => x.id !== item.id);
+      return [savedItem, ...withoutOld];
+    });
+
+    clearTradeForm();
+    setTab("journal");
+    console.log("Trade result saved");
+  };
+
+  const editTrade = (item) => {
+    setSelectedTrade(item);
+    setEditingId(item.id);
+
+    if (item.formSnapshot) {
+      setForm({
+        ...getDefaultForm(),
+        ...item.formSnapshot,
+        result: item.result || "Unfilled",
+        maxMove: item.maxMove || "",
+        maxDrawdown: item.maxDrawdown || "",
+        profitLoss: item.profitLoss || "",
+        notes: item.notes || "",
+        tradeImages: item.tradeImages || []
+      });
+    } else {
+      setForm((f) => ({
+        ...f,
+        direction: item.direction || "Long",
+        tradeEntryPrice: item.entry || "",
+        result: item.result || "Unfilled",
+        maxMove: item.maxMove || "",
+        maxDrawdown: item.maxDrawdown || "",
+        profitLoss: item.profitLoss || "",
+        notes: item.notes || "",
+        tradeImages: item.tradeImages || []
+      }));
+    }
+
+    setTab("checklist");
+  };
+
+  const selectAiSignal = (signal) => {
+    const signalText = String(signal.signal || "AI Signal");
+    const inferredDirection = signalText.toLowerCase().includes("short") || signalText.toLowerCase().includes("sell")
+      ? "Short"
+      : "Long";
+
+    const item = {
+      id: `ai-${signal.id || signal.created_at || Date.now()}`,
+      date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+      direction: inferredDirection,
+      entry: signal.price || form.tradeEntryPrice || "",
+      grade: "AI",
+      score: 0,
+      result: "Unfilled",
+      orderStatus: "Unfilled",
+      pendingOrder: true,
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      notes: `AI Signal: ${signalText}`,
+      tradeImages: [],
+      top: signalText,
+      sourceType: "AI Signal",
+      signal_id: signal.id || "",
+      signalName: signalText,
+      formSnapshot: null
+    };
+
+    setSelectedTrade(item);
+    setEditingId(null);
+    setForm((f) => ({
+      ...f,
+      direction: item.direction,
+      tradeEntryPrice: String(item.entry || ""),
       result: "Unfilled",
       maxMove: "",
       maxDrawdown: "",
       profitLoss: "",
-      notes: "",
-      tradeImages: []
-    }));
-
-    setTab("journal");
-    console.log("Trade saved to journal");
-  };
-
-  const editTrade = (item) => {
-    setEditingId(item.id);
-    setForm((f) => ({
-      ...f,
-      direction: item.direction,
-      tradeEntryPrice: item.entry,
-      result: item.result,
-      maxMove: item.maxMove,
-      maxDrawdown: item.maxDrawdown,
-      profitLoss: item.profitLoss,
       notes: item.notes,
-      tradeImages: item.tradeImages || []
+      tradeImages: []
     }));
     setTab("checklist");
   };
 
+  const selectActiveAnchor = (anchor) => {
+    if (anchor.sourceType === "AI Signal") {
+      selectAiSignal(anchor.rawSignal || anchor);
+    } else {
+      editTrade(anchor);
+    }
+  };
+
   const [letter, text] = grade(report.score);
-  const unfilledOrders = journal.filter((j) => j.pendingOrder || j.result === "Edge" || j.result === "Unfilled" || j.orderStatus === "Unfilled");
+  const unfilledOrders = journal.filter((j) => j.result === "Unfilled" || j.orderStatus === "Unfilled");
+
+  const activeAnchors = [
+    ...unfilledOrders.map((order) => ({
+      ...order,
+      sourceType: order.sourceType || "Manual Order"
+    })),
+    ...unfilledAiSignals.map((signal) => ({
+      id: `ai-${signal.id || signal.created_at || signal.signal}`,
+      date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+      direction: String(signal.signal || "").toLowerCase().includes("short") || String(signal.signal || "").toLowerCase().includes("sell") ? "Short" : "Long",
+      entry: signal.price || "",
+      grade: "AI",
+      score: "--",
+      result: "Unfilled",
+      orderStatus: "Unfilled",
+      pendingOrder: true,
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      notes: `AI Signal: ${signal.signal || "AI Signal"}`,
+      tradeImages: [],
+      top: signal.signal || "AI Signal",
+      sourceType: "AI Signal",
+      signal_id: signal.id || "",
+      signalName: signal.signal || "AI Signal",
+      rawSignal: signal
+    }))
+  ];
 
   if (!user) {
   return (
@@ -832,43 +1017,31 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {unfilledOrders.length > 0 && (
+        {activeAnchors.length > 0 && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Unfilled Orders</div>
-                <p className="mt-1 text-sm text-zinc-400">These are saved trades that have not been reported yet. Check them before market close/open.</p>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Active Trade Anchors</div>
+                <p className="mt-1 text-sm text-zinc-400">Manual orders and AI signals. Click one to load its trade info, checklist, grade, and report form.</p>
               </div>
-              <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review Orders</button>
+              <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review / Report</button>
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
-              {unfilledOrders.map((order) => (
-                <div key={order.id} className="rounded-2xl border border-[#2c2300] bg-[#090909] p-4">
-                  <div className="text-xl font-black text-[#00d27a]">{order.direction}: {Number(order.entry).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                  <div className="mt-1 text-sm text-zinc-400">Grade {order.grade} • {order.score}/100</div>
-                  <div className="mt-1 text-xs text-zinc-500">{order.date} • {order.top || "No top confluence saved"}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {unfilledAiSignals.length > 0 && (
-          <div className="fixed bottom-4 right-4 z-50 max-h-[420px] w-[310px] overflow-y-auto rounded-2xl border border-[#ffcc19] bg-black/95 p-4 shadow-xl shadow-black/60">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-black uppercase tracking-[0.22em] text-[#ffcc19]">Unfilled AI Signals</div>
-                <div className="mt-1 text-sm text-zinc-400">No journal/report matched yet.</div>
-              </div>
-              <div className="rounded-full bg-[#ffcc19] px-3 py-1 text-sm font-black text-black">{unfilledAiSignals.length}</div>
-            </div>
-            <div className="mt-3 space-y-2">
-              {unfilledAiSignals.slice(0, 8).map((signal) => (
-                <div key={signal.id || `${signal.signal}-${signal.created_at}`} className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-sm">
-                  <div className="font-black text-[#00d27a]">{signal.signal || "AI_SIGNAL"}</div>
-                  <div className="mt-1 text-xs text-zinc-400">{signal.ticker || "NQ"} • {signal.price || "--"} • {signal.interval || "--"}</div>
-                  <div className="mt-1 text-xs text-zinc-500">{signal.created_at ? new Date(signal.created_at).toLocaleString() : "No time"}</div>
-                </div>
+              {activeAnchors.map((anchor) => (
+                <button
+                  key={anchor.id}
+                  onClick={() => selectActiveAnchor(anchor)}
+                  className={`rounded-2xl border bg-[#090909] p-4 text-left transition hover:border-[#ffcc19] ${selectedTrade?.id === anchor.id ? "border-[#ffcc19]" : "border-[#2c2300]"}`}
+                >
+                  <div className="mb-2 inline-flex rounded-full bg-[#ffcc19] px-3 py-1 text-xs font-black text-black">
+                    {anchor.sourceType === "AI Signal" ? "AI SIGNAL" : "MANUAL ORDER"}
+                  </div>
+                  <div className="text-xl font-black text-[#00d27a]">
+                    {anchor.direction}: {anchor.entry ? Number(anchor.entry).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--"}
+                  </div>
+                  <div className="mt-1 text-sm text-zinc-400">Grade {anchor.grade} • {anchor.score}/100</div>
+                  <div className="mt-1 text-xs text-zinc-500">{anchor.date} • {anchor.top || "No top confluence saved"}</div>
+                </button>
               ))}
             </div>
           </div>
@@ -901,6 +1074,9 @@ const exportJournalCSV = () => {
                 <Select label="1H Bias" value={form.bias1H} options={["Bullish", "Bearish", "Indecisive"]} onChange={(v) => set("bias1H", v)} />
                 <Select label="4H Bias" value={form.bias4H} options={["Bullish", "Bearish", "Indecisive"]} onChange={(v) => set("bias4H", v)} />
               </div>
+              <button onClick={submitOrder} className="mt-5 rounded-xl bg-[#00d27a] px-5 py-3 font-black text-black">
+                Submit Order
+              </button>
             </Card>
             <Card>
               <Title>Adjusted Recommendations</Title>
@@ -1136,7 +1312,7 @@ function Breakdown({ report, recommendations, tips }) {
 }
 
 function Journal({ journal, saveTrade, editTrade, exportJournalCSV, form, set, editingId, handleImageUpload }) {
-  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId ? "Update Report" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
+  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId || form.result !== "Unfilled" ? "Save Result" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
 }
 
 function Behavior({ behavior, journal }) {
