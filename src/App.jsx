@@ -247,6 +247,16 @@ useEffect(() => {
     weeklyLevelPrice: "",
     autoUseIndicator: "Yes"
   });
+  const [aiLevels, setAiLevels] = useState([]);
+  const [weeklyLevelForm, setWeeklyLevelForm] = useState({
+    name: "",
+    price: ""
+  });
+  const [craterBoxForm, setCraterBoxForm] = useState({
+    name: "",
+    top: "",
+    bottom: ""
+  });
   const [form, setForm] = useState(getDefaultForm());
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -267,14 +277,54 @@ useEffect(() => {
     : 0;
   const aiCraterAway = aiCraterMid ? Math.abs(aiCraterMid - n(form.tradeEntryPrice)) : 0;
   const aiWeeklyAway = aiSettings.weeklyLevelPrice ? Math.abs(n(aiSettings.weeklyLevelPrice) - n(form.tradeEntryPrice)) : 0;
+  const weeklyLevels = aiLevels.filter((level) => level.level_type === "weekly_level");
+  const craterBoxes = aiLevels.filter((level) => level.level_type === "crater_box");
+
+  const nearestWeeklyLevel = useMemo(() => {
+    const entry = n(form.tradeEntryPrice);
+    if (!entry || weeklyLevels.length === 0) return null;
+
+    return [...weeklyLevels]
+      .map((level) => ({
+        ...level,
+        distance: Math.abs(n(level.price) - entry)
+      }))
+      .sort((a, b) => a.distance - b.distance)[0];
+  }, [weeklyLevels, form.tradeEntryPrice]);
+
+  const nearestCraterBox = useMemo(() => {
+    const entry = n(form.tradeEntryPrice);
+    if (!entry || craterBoxes.length === 0) return null;
+
+    return [...craterBoxes]
+      .map((box) => {
+        const top = n(box.top_price);
+        const bottom = n(box.bottom_price);
+        const high = Math.max(top, bottom);
+        const low = Math.min(top, bottom);
+        const mid = (high + low) / 2;
+        const inside = entry >= low && entry <= high;
+
+        return {
+          ...box,
+          high,
+          low,
+          mid,
+          width: Math.abs(high - low),
+          inside,
+          distance: inside ? 0 : Math.min(Math.abs(entry - high), Math.abs(entry - low))
+        };
+      })
+      .sort((a, b) => a.distance - b.distance)[0];
+  }, [craterBoxes, form.tradeEntryPrice]);
 
   const aiChecklist = [
-    { item: "Volume crater top", value: aiSettings.volumeCraterTop, needed: "Top of manually drawn crater box" },
-    { item: "Volume crater bottom", value: aiSettings.volumeCraterBottom, needed: "Bottom of manually drawn crater box" },
-    { item: "Crater size", value: aiCraterSize ? fmt(aiCraterSize) : "", needed: "Used by AI weighting" },
-    { item: "Weekly level price", value: aiSettings.weeklyLevelPrice, needed: "Manual weekly level for AI setup checks" },
-    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from levels" },
-    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with manual AI levels" }
+    { item: "Weekly levels saved", value: weeklyLevels.length ? `${weeklyLevels.length} levels` : "", needed: "Multiple weekly levels that update week-to-week" },
+    { item: "Crater boxes saved", value: craterBoxes.length ? `${craterBoxes.length} boxes` : "", needed: "Multiple crater zones for AI pillar zones" },
+    { item: "Nearest weekly level", value: nearestWeeklyLevel ? `${nearestWeeklyLevel.name || "Weekly"}: ${fmt(nearestWeeklyLevel.price)} (${fmt(nearestWeeklyLevel.distance)} pts away)` : "", needed: "AI uses closest weekly pillar" },
+    { item: "Nearest crater box", value: nearestCraterBox ? `${nearestCraterBox.name || "Crater"}: ${fmt(nearestCraterBox.low)}-${fmt(nearestCraterBox.high)} (${nearestCraterBox.inside ? "inside" : `${fmt(nearestCraterBox.distance)} pts away`})` : "", needed: "AI uses closest crater pillar" },
+    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from saved pillar zones" },
+    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with weekly/crater pillar zones" }
   ];
 
   const fetchAiSignals = async () => {
@@ -294,6 +344,111 @@ useEffect(() => {
       setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} AI signals.` : "No AI signals found yet.");
     }
     setAiLoading(false);
+  };
+
+  const fetchAiLevels = async () => {
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("ai_levels")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("AI levels fetch error:", error);
+      return;
+    }
+
+    setAiLevels(data || []);
+  };
+
+  const submitWeeklyLevel = async () => {
+    if (!user) {
+      alert("Please log in before saving weekly levels.");
+      return;
+    }
+
+    if (!weeklyLevelForm.price) {
+      alert("Enter a weekly level price first.");
+      return;
+    }
+
+    const payload = {
+      user_id: user.id,
+      level_type: "weekly_level",
+      name: weeklyLevelForm.name || "Weekly Level",
+      price: Number(weeklyLevelForm.price),
+      top_price: null,
+      bottom_price: null
+    };
+
+    const { data, error } = await supabase
+      .from("ai_levels")
+      .insert([payload])
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("Weekly level save error:", error);
+      alert("Weekly level did not save. Check the ai_levels table.");
+      return;
+    }
+
+    setAiLevels((levels) => [data, ...levels]);
+    setWeeklyLevelForm({ name: "", price: "" });
+  };
+
+  const submitCraterBox = async () => {
+    if (!user) {
+      alert("Please log in before saving crater boxes.");
+      return;
+    }
+
+    if (!craterBoxForm.top || !craterBoxForm.bottom) {
+      alert("Enter both crater top and crater bottom.");
+      return;
+    }
+
+    const payload = {
+      user_id: user.id,
+      level_type: "crater_box",
+      name: craterBoxForm.name || "Crater Box",
+      price: null,
+      top_price: Number(craterBoxForm.top),
+      bottom_price: Number(craterBoxForm.bottom)
+    };
+
+    const { data, error } = await supabase
+      .from("ai_levels")
+      .insert([payload])
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("Crater box save error:", error);
+      alert("Crater box did not save. Check the ai_levels table.");
+      return;
+    }
+
+    setAiLevels((levels) => [data, ...levels]);
+    setCraterBoxForm({ name: "", top: "", bottom: "" });
+  };
+
+  const deleteAiLevel = async (levelId) => {
+    const { error } = await supabase
+      .from("ai_levels")
+      .delete()
+      .eq("id", levelId)
+      .eq("user_id", user.id);
+
+    if (error) {
+      console.error("AI level delete error:", error);
+      alert("Could not delete that AI level.");
+      return;
+    }
+
+    setAiLevels((levels) => levels.filter((level) => level.id !== levelId));
   };
 
   useEffect(() => {
@@ -331,12 +486,13 @@ useEffect(() => {
         
     fetchSavedJournal();
     fetchAiSignals();
+    fetchAiLevels();
   }, [user]);
 
   const submitAiSettings = async () => {
     const { error } = await supabase.from("ai_manual_inputs").insert([
       {
-        user_id: "djh1984investing-eng",
+        user_id: user?.id || "djh1984investing-eng",
         volume_crater_top: aiSettings.volumeCraterTop ? Number(aiSettings.volumeCraterTop) : null,
         volume_crater_bottom: aiSettings.volumeCraterBottom ? Number(aiSettings.volumeCraterBottom) : null,
         weekly_level_price: aiSettings.weeklyLevelPrice ? Number(aiSettings.weeklyLevelPrice) : null,
@@ -972,11 +1128,21 @@ const exportJournalCSV = () => {
 
   return (
     <WhopGate>
-    <div className="min-h-screen bg-[#080808] text-white">
-      <div className="mx-auto max-w-[1500px] p-4 md:p-6">
+    <div className="relative min-h-screen bg-[#080808] text-white">
+      <div className="fixed right-4 top-4 z-50 flex items-center gap-3 rounded-2xl border border-[#2c2300] bg-black/90 px-4 py-3 shadow-xl shadow-black/50">
+        <div className="text-right">
+          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-[#ffcc19]">Account</div>
+          <div className="max-w-[210px] truncate text-xs text-zinc-300">{user?.email}</div>
+        </div>
+        <button onClick={signOut} className="rounded-xl border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]">Logout</button>
+      </div>
+      <div className="mx-auto max-w-[1500px] p-4 pt-24 md:p-6 md:pt-20">
         <div className="grid gap-5 lg:grid-cols-[1fr_230px]">
           <div>
-            <div className="mb-5 text-[#ffcc19] font-black tracking-[0.24em] text-sm">♕ THE PLAYMAKER</div>
+            <div className="mb-5 flex items-center gap-3 text-[#ffcc19]">
+              <CrownMark />
+              <div className="font-black tracking-[0.24em] text-sm">THE PLAYMAKER</div>
+            </div>
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
           </div>
@@ -1004,6 +1170,7 @@ const exportJournalCSV = () => {
               <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ACTIVE TRADE ANCHOR</div>
               <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
               <div className="mt-1 text-sm text-zinc-400">Starting Level: {startingLevel || "None selected"} • Top 3 within 5 pts: {report.topWithin5}/3 • Far levels: {report.farCount}</div>
+              <div className="mt-2 text-xs text-zinc-500">AI pillars: {weeklyLevels.length} weekly levels • {craterBoxes.length} crater boxes</div>
             </div>
             <div className="grid gap-2 text-sm text-zinc-300 md:grid-cols-3">
               {recommendations.map((r) => (
@@ -1178,20 +1345,38 @@ const exportJournalCSV = () => {
         {tab === "settings" && (
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
             <Card>
-              <Title>AI Auto Setup Settings</Title>
-              <p className="mt-2 text-zinc-400">Enter manual crater and weekly levels so the AI can remember important historical zones and combine them with webhook signals.</p>
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <Field label="Volume Crater Top Price" value={aiSettings.volumeCraterTop} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterTop: v }))} />
-                <Field label="Volume Crater Bottom Price" value={aiSettings.volumeCraterBottom} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterBottom: v }))} />
-                <Field label="Weekly Level Price" value={aiSettings.weeklyLevelPrice} onChange={(v) => setAiSettings((s) => ({ ...s, weeklyLevelPrice: v }))} />
-                <Select label="Use Indicator Auto Signals" value={aiSettings.autoUseIndicator} options={["Yes", "No"]} onChange={(v) => setAiSettings((s) => ({ ...s, autoUseIndicator: v }))} />
+              <Title>AI Pillar Zones</Title>
+              <p className="mt-2 text-zinc-400">Save multiple weekly levels and crater boxes. These are the weekly foundation zones the AI uses until you delete or replace them.</p>
+
+              <div className="mt-5 rounded-2xl border border-[#2c2300] bg-[#090909] p-4">
+                <div className="text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Add Weekly Level</div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <Field label="Level Name" value={weeklyLevelForm.name} onChange={(v) => setWeeklyLevelForm((level) => ({ ...level, name: v }))} />
+                  <Field label="Price" value={weeklyLevelForm.price} onChange={(v) => setWeeklyLevelForm((level) => ({ ...level, price: v }))} />
+                </div>
+                <button onClick={submitWeeklyLevel} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Save Weekly Level</button>
               </div>
+
+              <div className="mt-5 rounded-2xl border border-[#2c2300] bg-[#090909] p-4">
+                <div className="text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Add Crater Box</div>
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  <Field label="Box Name" value={craterBoxForm.name} onChange={(v) => setCraterBoxForm((box) => ({ ...box, name: v }))} />
+                  <Field label="Top Price" value={craterBoxForm.top} onChange={(v) => setCraterBoxForm((box) => ({ ...box, top: v }))} />
+                  <Field label="Bottom Price" value={craterBoxForm.bottom} onChange={(v) => setCraterBoxForm((box) => ({ ...box, bottom: v }))} />
+                </div>
+                <button onClick={submitCraterBox} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Save Crater Box</button>
+              </div>
+
               <div className="mt-5 grid gap-3 md:grid-cols-3">
-                <Small label="Crater Size" value={aiCraterSize ? fmt(aiCraterSize) : "--"} />
-                <Small label="Crater Mid Away" value={aiCraterAway ? fmt(aiCraterAway) : "--"} />
-                <Small label="Weekly Away" value={aiWeeklyAway ? fmt(aiWeeklyAway) : "--"} />
+                <Small label="Weekly Levels" value={weeklyLevels.length} />
+                <Small label="Crater Boxes" value={craterBoxes.length} />
+                <Small label="Auto Signals" value={aiSettings.autoUseIndicator} />
               </div>
-              <button onClick={submitAiSettings} className="mt-5 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Submit AI Settings</button>
+
+              <div className="mt-5">
+                <Select label="Use Indicator Auto Signals" value={aiSettings.autoUseIndicator} options={["Yes", "No"]} onChange={(v) => setAiSettings((s) => ({ ...s, autoUseIndicator: v }))} />
+                <button onClick={submitAiSettings} className="mt-4 rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19] hover:bg-[#171200]">Save Indicator Setting</button>
+              </div>
             </Card>
 
             <Card>
@@ -1211,6 +1396,54 @@ const exportJournalCSV = () => {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <Title>Saved AI Pillar Zones</Title>
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <div>
+                  <div className="mb-3 text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
+                  <div className="space-y-3">
+                    {weeklyLevels.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No weekly levels saved yet.</div>}
+                    {weeklyLevels.map((level) => (
+                      <div key={level.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <b className="text-[#ffcc19]">{level.name || "Weekly Level"}</b>
+                            <div className="mt-1 text-sm text-zinc-300">Price: {fmt(level.price)}</div>
+                            <div className="mt-1 text-xs text-zinc-500">{level.created_at ? new Date(level.created_at).toLocaleDateString() : ""}</div>
+                          </div>
+                          <button onClick={() => deleteAiLevel(level.id)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30">Delete</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-3 text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Crater Boxes</div>
+                  <div className="space-y-3">
+                    {craterBoxes.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No crater boxes saved yet.</div>}
+                    {craterBoxes.map((box) => {
+                      const top = n(box.top_price);
+                      const bottom = n(box.bottom_price);
+                      const width = Math.abs(top - bottom);
+                      return (
+                        <div key={box.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <b className="text-[#ffcc19]">{box.name || "Crater Box"}</b>
+                              <div className="mt-1 text-sm text-zinc-300">Top: {fmt(top)} • Bottom: {fmt(bottom)}</div>
+                              <div className="mt-1 text-xs text-zinc-500">Width: {fmt(width)} pts • {box.created_at ? new Date(box.created_at).toLocaleDateString() : ""}</div>
+                            </div>
+                            <button onClick={() => deleteAiLevel(box.id)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30">Delete</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             </Card>
 
@@ -1254,6 +1487,19 @@ const exportJournalCSV = () => {
       </div>
     </div>
     </WhopGate>
+  );
+}
+
+function CrownMark() {
+  return (
+    <svg width="38" height="30" viewBox="0 0 76 60" fill="none" aria-label="Playmaker crown">
+      <path d="M8 48L14 19L29 35L38 10L47 35L62 19L68 48H8Z" fill="#ffcc19" />
+      <path d="M10 52H66" stroke="#ffcc19" strokeWidth="7" strokeLinecap="round" />
+      <circle cx="14" cy="17" r="5" fill="#ffcc19" />
+      <circle cx="38" cy="9" r="5" fill="#ffcc19" />
+      <circle cx="62" cy="17" r="5" fill="#ffcc19" />
+      <path d="M22 45H54" stroke="#080808" strokeWidth="4" strokeLinecap="round" opacity="0.65" />
+    </svg>
   );
 }
 
