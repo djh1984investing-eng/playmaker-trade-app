@@ -708,7 +708,7 @@ const exportJournalCSV = () => {
 }));
 
 console.log("Trade saved to journal");
-setTab("journal");
+
 
 };
   const editTrade = (item) => {
