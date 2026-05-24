@@ -248,6 +248,7 @@ useEffect(() => {
     autoUseIndicator: "Yes"
   });
   const [aiLevels, setAiLevels] = useState([]);
+  const [aiTradeMemory, setAiTradeMemory] = useState([]);
   const [weeklyLevelForm, setWeeklyLevelForm] = useState({
     name: "",
     price: ""
@@ -451,6 +452,24 @@ useEffect(() => {
     setAiLevels((levels) => levels.filter((level) => level.id !== levelId));
   };
 
+
+  const fetchAiTradeMemory = async () => {
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("ai_trade_memory")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("AI trade memory fetch error:", error);
+      return;
+    }
+
+    setAiTradeMemory(data || []);
+  };
+
   useEffect(() => {
     const fetchSavedJournal = async () => {
       if (!user) return;
@@ -487,6 +506,7 @@ useEffect(() => {
     fetchSavedJournal();
     fetchAiSignals();
     fetchAiLevels();
+    fetchAiTradeMemory();
   }, [user]);
 
   const submitAiSettings = async () => {
@@ -641,6 +661,47 @@ useEffect(() => {
       confluences: active.length
     };
   }, [form, startingLevel]);
+
+  const memoryStats = useMemo(() => {
+    const closed = aiTradeMemory.filter((trade) => ["Win", "Loss", "BE"].includes(trade.result));
+    const wins = closed.filter((trade) => trade.result === "Win").length;
+    const losses = closed.filter((trade) => trade.result === "Loss").length;
+    const be = closed.filter((trade) => trade.result === "BE").length;
+    const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
+
+    const currentKeys = new Set(report?.active?.map((row) => row.key) || []);
+    const similar = closed.filter((trade) => {
+      const confs = Array.isArray(trade.confluences) ? trade.confluences : [];
+      return confs.some((row) => currentKeys.has(row.key));
+    });
+    const similarWins = similar.filter((trade) => trade.result === "Win").length;
+    const similarWinRate = similar.length ? Math.round((similarWins / similar.length) * 100) : 0;
+
+    let adjustment = 0;
+    if (similar.length >= 5) {
+      if (similarWinRate >= 70) adjustment = 6;
+      else if (similarWinRate >= 60) adjustment = 3;
+      else if (similarWinRate <= 35) adjustment = -6;
+      else if (similarWinRate <= 45) adjustment = -3;
+    } else if (closed.length >= 10) {
+      if (winRate >= 65) adjustment = 2;
+      else if (winRate <= 40) adjustment = -2;
+    }
+
+    return {
+      total: closed.length,
+      wins,
+      losses,
+      be,
+      winRate,
+      similar: similar.length,
+      similarWinRate,
+      adjustment,
+      confidence: clamp((report?.score || 0) + adjustment, 0, 100)
+    };
+  }, [aiTradeMemory, report]);
+
+
 
   const recommendations = useMemo(() => {
     const entry = n(form.tradeEntryPrice);
@@ -860,6 +921,48 @@ const exportJournalCSV = () => {
     screenshots: item.tradeImages || []
   });
 
+
+  const tradeMemoryPayload = (item) => ({
+    user_id: user.id,
+    source_type: item.sourceType || "Manual Order",
+    signal_id: item.signal_id || null,
+    symbol: "NQ",
+    direction: item.direction,
+    entry_price: Number(item.entry) || null,
+    grade: item.grade,
+    score: item.score,
+    result: item.result,
+    max_move: Number(item.maxMove) || null,
+    max_drawdown: Number(item.maxDrawdown) || null,
+    profit_loss: Number(item.profitLoss) || null,
+    confluences: report.active,
+    recommendations,
+    notes: item.notes
+  });
+
+  const saveTradeToAiMemory = async (item) => {
+    if (!user) return;
+    if (!["Win", "Loss", "BE"].includes(item.result)) return;
+
+    const payload = tradeMemoryPayload(item);
+
+    const { data, error } = await supabase
+      .from("ai_trade_memory")
+      .insert([payload])
+      .select("*")
+      .single();
+
+    if (error) {
+      console.error("AI memory save error:", error);
+      alert("Trade saved, but AI memory did not update. Check ai_trade_memory table columns.");
+      return;
+    }
+
+    if (data) {
+      setAiTradeMemory((memory) => [data, ...memory]);
+    }
+  };
+
   const clearTradeForm = () => {
     const next = getDefaultForm();
     next.tradeEntryPrice = "";
@@ -947,6 +1050,7 @@ const exportJournalCSV = () => {
     const item = makeJournalItem(form.result);
     const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
     const savedItem = await saveTradeToDatabase(item, isReportingExisting);
+    await saveTradeToAiMemory(savedItem);
 
     setJournal((j) => {
       const withoutOld = j.filter((x) => x.id !== item.id);
@@ -1018,12 +1122,61 @@ const exportJournalCSV = () => {
       formSnapshot: null
     };
 
-    setSelectedTrade(item);
+    const getSignalValue = (...keys) => {
+      for (const key of keys) {
+        if (signal?.[key] !== undefined && signal?.[key] !== null && signal?.[key] !== "") return signal[key];
+      }
+      return "";
+    };
+
+    const yesNo = (value) => {
+      const text = String(value || "").toLowerCase();
+      return text === "yes" || text === "true" || text === "1" || text === "long" || text === "short" ? "Yes" : "No";
+    };
+
+    const fib15 = getSignalValue("fib_15m", "retrace15m", "retrace_15m", "fib15");
+    const fib1h = getSignalValue("fib_1h", "retrace1h", "retrace_1h", "fib1h");
+    const fib4h = getSignalValue("fib_4h", "retrace4h", "retrace_4h", "fib4h");
+    const stdvSession = getSignalValue("stdv_session", "prev_session_stdv", "prevSessionSTDV", "session_stdv");
+    const stdvPrior = getSignalValue("prior_session_stdv", "priorSessionSTDV");
+    const stdv1h = getSignalValue("stdv_1h", "oneHSTDV", "stdv1h");
+    const stdv4h = getSignalValue("stdv_4h", "fourHSTDV", "stdv4h");
+    const lvnPrice = getSignalValue("lvn", "low_volume_node", "lowVolumeNode", "volume_crater_mid");
+    const playmakerSignal = getSignalValue("playmaker_signal", "playMakerSignal", "signal");
+    const liquidity = getSignalValue("liquidity", "has_liquidity");
+
+    setSelectedTrade({ ...item, rawSignal: signal });
     setEditingId(null);
     setForm((f) => ({
       ...f,
       direction: item.direction,
       tradeEntryPrice: String(item.entry || ""),
+      playMakerSignalOn: yesNo(playmakerSignal),
+      playMakerSignalAway: "0",
+      lowVolumeNodeOn: lvnPrice ? "Yes" : f.lowVolumeNodeOn,
+      lowVolumeNodeAway: lvnPrice && item.entry ? String(Math.abs(n(lvnPrice) - n(item.entry))) : f.lowVolumeNodeAway,
+      prevSessionSTDVOn: stdvSession ? "Yes" : f.prevSessionSTDVOn,
+      prevSessionSTDVValue: stdvSession ? String(stdvSession) : f.prevSessionSTDVValue,
+      prevSessionSTDVAway: "0",
+      priorSessionSTDVOn: stdvPrior ? "Yes" : f.priorSessionSTDVOn,
+      priorSessionSTDVValue: stdvPrior ? String(stdvPrior) : f.priorSessionSTDVValue,
+      priorSessionSTDVAway: "0",
+      oneHSTDVOn: stdv1h ? "Yes" : f.oneHSTDVOn,
+      oneHSTDVValue: stdv1h ? String(stdv1h) : f.oneHSTDVValue,
+      oneHSTDVAway: "0",
+      fourHSTDVOn: stdv4h ? "Yes" : f.fourHSTDVOn,
+      fourHSTDVValue: stdv4h ? String(stdv4h) : f.fourHSTDVValue,
+      fourHSTDVAway: "0",
+      retrace15mOn: fib15 ? "Yes" : f.retrace15mOn,
+      retrace15mValue: fib15 ? String(fib15) : f.retrace15mValue,
+      retrace15mAway: "0",
+      retrace1HOn: fib1h ? "Yes" : f.retrace1HOn,
+      retrace1HValue: fib1h ? String(fib1h) : f.retrace1HValue,
+      retrace1HAway: "0",
+      retrace4HOn: fib4h ? "Yes" : f.retrace4HOn,
+      retrace4HValue: fib4h ? String(fib4h) : f.retrace4HValue,
+      retrace4HAway: "0",
+      liquidityOn: yesNo(liquidity),
       result: "Unfilled",
       maxMove: "",
       maxDrawdown: "",
@@ -1444,6 +1597,34 @@ const exportJournalCSV = () => {
                     })}
                   </div>
                 </div>
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <Title>AI Learning Memory</Title>
+              <p className="mt-2 text-zinc-400">Manual results and AI signal results save here. This adjusts future confidence without replacing the PlayMaker rule score.</p>
+              <div className="mt-5 grid gap-3 md:grid-cols-5">
+                <Small label="Closed Trades" value={memoryStats.total} />
+                <Small label="Wins" value={memoryStats.wins} />
+                <Small label="Losses" value={memoryStats.losses} />
+                <Small label="Win Rate" value={`${memoryStats.winRate}%`} />
+                <Small label="AI Confidence" value={`${memoryStats.confidence}/100`} />
+              </div>
+              <div className="mt-4 rounded-xl border border-[#2c2300] bg-[#090909] p-4 text-sm text-zinc-300">
+                Current memory adjustment: <b className="text-[#ffcc19]">{memoryStats.adjustment >= 0 ? `+${memoryStats.adjustment}` : memoryStats.adjustment}</b>. Similar setup sample: {memoryStats.similar} trades • {memoryStats.similarWinRate}% win rate.
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {aiTradeMemory.slice(0, 6).map((memory) => (
+                  <div key={memory.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <b className="text-[#ffcc19]">{memory.source_type || "Trade"}</b>
+                      <span className={`rounded-full px-3 py-1 text-xs font-black ${memory.result === "Win" ? "bg-[#00d27a] text-black" : memory.result === "Loss" ? "bg-red-900 text-red-200" : "bg-zinc-800 text-zinc-300"}`}>{memory.result}</span>
+                    </div>
+                    <div className="mt-2 text-zinc-400">{memory.direction || "--"} • {memory.entry_price || "--"} • Score {memory.score || "--"}</div>
+                    <div className="mt-1 text-xs text-zinc-500">{memory.created_at ? new Date(memory.created_at).toLocaleString() : ""}</div>
+                  </div>
+                ))}
+                {aiTradeMemory.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No AI learning results saved yet. Report Win/Loss/BE trades to start memory.</div>}
               </div>
             </Card>
 
