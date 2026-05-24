@@ -648,9 +648,10 @@ const exportJournalCSV = () => {
 
   const saveTrade = async () => {
     if (!user) {
-  alert("Please log in before saving a trade.");
-  return;
-}
+      alert("Please log in before saving a trade.");
+      return;
+    }
+
     const item = {
       id: editingId || Date.now(),
       date: new Date().toLocaleDateString(),
@@ -668,6 +669,7 @@ const exportJournalCSV = () => {
       tradeImages: form.tradeImages,
       top: report.active.slice(0, 4).map((r) => r.name).join(", ")
     };
+
     const { error } = await supabase.from("trade_journal").insert([
       {
         user_id: user.id,
@@ -696,27 +698,36 @@ const exportJournalCSV = () => {
 
     setJournal((j) => editingId ? j.map((x) => x.id === editingId ? item : x) : [item, ...j]);
     setEditingId(null);
-  
+
     setForm((prev) => ({
-  ...prev,
-  result: "Unfilled",
-  maxMove: "",
-  maxDrawdown: "",
-  profitLoss: "",
-  notes: "",
-  tradeImages: []
-}));
+      ...prev,
+      result: "Unfilled",
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      notes: "",
+      tradeImages: []
+    }));
 
-console.log("Trade saved to journal");
-};
+    setTab("journal");
+    console.log("Trade saved to journal");
+  };
 
-};
   const editTrade = (item) => {
     setEditingId(item.id);
-    setForm((f) => ({ ...f, direction: item.direction, tradeEntryPrice: item.entry, result: item.result, maxMove: item.maxMove, maxDrawdown: item.maxDrawdown, profitLoss: item.profitLoss, notes: item.notes,
-      tradeImages: item.tradeImages || [] })) ;
+    setForm((f) => ({
+      ...f,
+      direction: item.direction,
+      tradeEntryPrice: item.entry,
+      result: item.result,
+      maxMove: item.maxMove,
+      maxDrawdown: item.maxDrawdown,
+      profitLoss: item.profitLoss,
+      notes: item.notes,
+      tradeImages: item.tradeImages || []
+    }));
     setTab("checklist");
-
+  };
 
   const [letter, text] = grade(report.score);
   const unfilledOrders = journal.filter((j) => j.pendingOrder || j.result === "Edge" || j.result === "Unfilled" || j.orderStatus === "Unfilled");
@@ -1052,7 +1063,18 @@ console.log("Trade saved to journal");
 
         {tab === "behavior" && <Behavior behavior={behavior} journal={journal} />}
         {tab === "breakdown" && <Breakdown report={report} recommendations={recommendations} tips={tips} />}
-        {tab === "journal" && <Journal journal={journal} saveTrade={saveTrade} editTrade={editTrade} form={form} set={set} editingId={editingId} handleImageUpload={handleImageUpload} />}
+        {tab === "journal" && (
+          <Journal
+            journal={journal}
+            saveTrade={saveTrade}
+            editTrade={editTrade}
+            exportJournalCSV={exportJournalCSV}
+            form={form}
+            set={set}
+            editingId={editingId}
+            handleImageUpload={handleImageUpload}
+          />
+        )}
       </div>
     </div>
     </WhopGate>
@@ -1113,8 +1135,8 @@ function Breakdown({ report, recommendations, tips }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-4"><Small label="Zone Score" value={`${report.zoneScore}/100`} /><Small label="Precision Grade Score" value={`${report.score}/100`} /><Small label="Top 3 Within 5" value={`${report.topWithin5}/3`} /><Small label="Far Levels 8+" value={report.farCount} /></div><div className="mt-4 rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-sm text-zinc-300">Raw points still count the reaction zone. The grade is capped by entry precision: top-weighted confluences need to align within 3–5 points for A/A+.</div><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
 }
 
-function Journal({ journal, saveTrade, editTrade, form, set, editingId, handleImageUpload }) {
-  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId ? "Update Report" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
+function Journal({ journal, saveTrade, editTrade, exportJournalCSV, form, set, editingId, handleImageUpload }) {
+  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId ? "Update Report" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
 }
 
 function Behavior({ behavior, journal }) {
