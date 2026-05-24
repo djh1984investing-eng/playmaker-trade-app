@@ -696,7 +696,7 @@ const exportJournalCSV = () => {
 
     setJournal((j) => editingId ? j.map((x) => x.id === editingId ? item : x) : [item, ...j]);
     setEditingId(null);
-  };
+  
     setForm((prev) => ({
   ...prev,
   result: "Unfilled",
@@ -708,7 +708,7 @@ const exportJournalCSV = () => {
 }));
 
 console.log("Trade saved to journal");
-
+};
 
 };
   const editTrade = (item) => {
