@@ -57,6 +57,68 @@ const fmtPrice = (value) => {
   return Number.isFinite(parsed) ? parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--";
 };
 
+const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+
+const parseYesNo = (value) => {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["yes", "true", "1", "y", "on", "bullish", "long", "buy"].includes(text)) return "Yes";
+  if (["no", "false", "0", "n", "off", "bearish", "short", "sell"].includes(text)) return "No";
+  return null;
+};
+
+const normalizeRetrace = (value) => {
+  const parsed = parsePrice(value);
+  if (parsed === null) return "None";
+  const abs = Math.abs(parsed);
+  const choices = [0.5, 0.618, 0.705, 0.786];
+  const closest = choices.reduce((best, cur) => Math.abs(cur - abs) < Math.abs(best - abs) ? cur : best, choices[0]);
+  return closest === 0.5 ? "0.50" : String(closest);
+};
+
+const normalizeSTDV = (value) => {
+  const parsed = parsePrice(value);
+  if (parsed === null) return "0";
+  return String(parsed);
+};
+
+const normalizeStatus = (value) => String(value ?? "").trim().toLowerCase();
+
+const isOpenOrder = (item) => {
+  const result = normalizeStatus(item?.result);
+  const orderStatus = normalizeStatus(item?.orderStatus);
+
+  if (["win", "loss", "be", "filled", "reported", "closed", "cancelled", "canceled"].includes(result)) {
+    return false;
+  }
+
+  if (["filled", "reported", "closed", "cancelled", "canceled"].includes(orderStatus)) {
+    return false;
+  }
+
+  return result === "unfilled" || result === "edge" || orderStatus === "unfilled" || item?.pendingOrder === true;
+};
+
+const sameTradeAnchor = (a, b) => {
+  if (!a || !b) return false;
+
+  const aId = String(a.id ?? "");
+  const bId = String(b.id ?? "");
+  if (aId && bId && aId === bId) return true;
+
+  const aSignal = String(a.signal_id ?? a.ai_signal_id ?? "");
+  const bSignal = String(b.signal_id ?? b.ai_signal_id ?? "");
+  if (aSignal && bSignal && aSignal === bSignal) return true;
+
+  const aEntry = String(a.entry ?? a.entry_price ?? "").replace(/,/g, "");
+  const bEntry = String(b.entry ?? b.entry_price ?? "").replace(/,/g, "");
+  const sameEntry = aEntry && bEntry && Number(aEntry) === Number(bEntry);
+
+  const sameDirection = String(a.direction ?? "").toLowerCase() === String(b.direction ?? "").toLowerCase();
+
+  return sameEntry && sameDirection && (isOpenOrder(a) || isOpenOrder(b));
+};
+
+
 function distanceMult(pointsAway) {
   const d = Math.abs(n(pointsAway));
   if (d <= 1) return 1;
@@ -296,13 +358,52 @@ useEffect(() => {
     ? Math.abs(currentWeeklyPrice - n(form.tradeEntryPrice))
     : 0;
 
+  const automationOn = aiSettings.autoUseIndicator === "Yes";
+  const hasTradeEntry = parsePrice(form.tradeEntryPrice) !== null;
+
   const aiChecklist = [
-    { item: "Volume crater top", value: aiSettings.volumeCraterTop, needed: "Top of manually drawn crater box" },
-    { item: "Volume crater bottom", value: aiSettings.volumeCraterBottom, needed: "Bottom of manually drawn crater box" },
-    { item: "Crater size", value: aiCraterSize ? fmt(aiCraterSize) : "", needed: "Used by AI weighting" },
-    { item: "Weekly level price", value: aiSettings.weeklyLevelPrice, needed: "Manual weekly level for AI setup checks" },
-    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from levels" },
-    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with manual AI levels" }
+    {
+      item: "Saved weekly levels",
+      value: weeklyLevels.length,
+      needed: "Manual weekly pillar zones",
+      ready: weeklyLevels.length > 0,
+      status: weeklyLevels.length > 0 ? "Ready" : "Needed"
+    },
+    {
+      item: "Saved crater boxes",
+      value: craterBoxes.length,
+      needed: "Manual crater box pillar zones",
+      ready: craterBoxes.length > 0,
+      status: craterBoxes.length > 0 ? "Ready" : "Needed"
+    },
+    {
+      item: "Current draft crater",
+      value: aiCraterSize ? `${fmt(aiCraterSize)} pts wide / Mid ${fmtPrice(aiCraterMid)}` : "No draft typed",
+      needed: craterBoxes.length > 0 ? "Optional draft input only. Saved crater boxes are already ready." : "Enter top and bottom only when adding a new crater box.",
+      ready: craterBoxes.length > 0 || aiCraterSize > 0,
+      status: craterBoxes.length > 0 ? "Optional" : (aiCraterSize > 0 ? "Ready" : "Needed")
+    },
+    {
+      item: "Current draft weekly level",
+      value: currentWeeklyPrice !== null ? fmtPrice(currentWeeklyPrice) : "No draft typed",
+      needed: weeklyLevels.length > 0 ? "Optional draft input only. Saved weekly levels are already ready." : "Enter a price only when adding a new weekly level.",
+      ready: weeklyLevels.length > 0 || currentWeeklyPrice !== null,
+      status: weeklyLevels.length > 0 ? "Optional" : (currentWeeklyPrice !== null ? "Ready" : "Needed")
+    },
+    {
+      item: "Trade entry source",
+      value: automationOn ? "Auto from TradingView webhook" : (hasTradeEntry ? fmtPrice(parsePrice(form.tradeEntryPrice)) : "Manual entry needed"),
+      needed: automationOn ? "Automatic mode uses the incoming TradingView alert price." : "Manual mode needs an entry price typed before scoring.",
+      ready: automationOn || hasTradeEntry,
+      status: automationOn ? "Auto" : (hasTradeEntry ? "Ready" : "Needed")
+    },
+    {
+      item: "Indicator automation",
+      value: aiSettings.autoUseIndicator,
+      needed: "Lets webhook signals combine with saved AI pillar zones",
+      ready: true,
+      status: aiSettings.autoUseIndicator === "Yes" ? "Ready" : "Manual"
+    }
   ];
 
   const fetchAiLevels = async () => {
@@ -749,7 +850,7 @@ useEffect(() => {
   }, [report.rows, form.tradeEntryPrice, form.direction]);
 
   const behavior = useMemo(() => {
-    const closed = journal.filter((j) => j.result !== "Edge" && j.result !== "Unfilled" && j.orderStatus !== "Unfilled");
+    const closed = journal.filter((j) => !isOpenOrder(j));
     const wins = closed.filter((j) => j.result === "Win").length;
     const losses = closed.filter((j) => j.result === "Loss").length;
     const be = closed.filter((j) => j.result === "BE").length;
@@ -770,7 +871,7 @@ useEffect(() => {
     if (startingLevel) t.push("Starting level selected. All other starting-level toggles are locked to prevent mixed anchors.");
     if (isYes(form.ltfVolNodeOn)) t.push("LTF volume node is active: use it to pinpoint the entry suggestion.");
     if (form.orderBlockState === "Fresh" && form.orderBlockTF === "5m") t.push("Fresh low timeframe OB should stay lower weight because the turn can happen before the block fully builds.");
-    if (journal.some((j) => j.pendingOrder || j.result === "Edge" || j.orderStatus === "Unfilled")) t.push("You have unfilled orders showing on the front screen. Review them before market close or market open.");
+    if (journal.some((j) => isOpenOrder(j))) t.push("You have unfilled orders showing on the front screen. Review them before market close or market open.");
     return t;
   }, [form, startingLevel, report.coreBonus, journal]);
 
@@ -991,11 +1092,43 @@ const exportJournalCSV = () => {
     return savedItem;
   };
 
+  const saveTradeMemory = async (item) => {
+    if (!user || isOpenOrder(item)) return;
+
+    const { error } = await supabase.from("ai_trade_memory").insert([
+      {
+        user_id: user.id,
+        source_type: item.sourceType || "Manual Order",
+        signal_id: item.signal_id || null,
+        symbol: "NQ",
+        direction: item.direction,
+        entry_price: Number(item.entry) || null,
+        grade: item.grade,
+        score: Number(item.score) || null,
+        result: item.result,
+        max_move: Number(item.maxMove) || null,
+        max_drawdown: Number(item.maxDrawdown) || null,
+        profit_loss: Number(item.profitLoss) || null,
+        confluences: report.active,
+        recommendations,
+        notes: item.notes || null
+      }
+    ]);
+
+    if (error) {
+      console.error("AI trade memory save error:", error);
+    }
+  };
+
   const submitOrder = async () => {
     const item = makeJournalItem("Unfilled", { sourceType: "Manual Order" });
     const savedItem = await saveTradeToDatabase(item, false);
 
-    setJournal((j) => [savedItem, ...j]);
+    setJournal((j) => {
+      const withoutDuplicates = j.filter((x) => !sameTradeAnchor(x, savedItem));
+      return [savedItem, ...withoutDuplicates];
+    });
+
     clearTradeForm();
     setTab("trade");
     console.log("Order submitted to active anchors");
@@ -1006,14 +1139,19 @@ const exportJournalCSV = () => {
     const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
     const savedItem = await saveTradeToDatabase(item, isReportingExisting);
 
+    await saveTradeMemory(savedItem);
+
     setJournal((j) => {
-      const withoutOld = j.filter((x) => x.id !== item.id);
-      return [savedItem, ...withoutOld];
+      const withoutOldOpenCopies = j.filter((x) => !sameTradeAnchor(x, savedItem));
+
+      // Closed/filled/reported orders stay in the Journal table, but they no longer qualify
+      // for Active Trade Anchors because isOpenOrder() returns false for them.
+      return [savedItem, ...withoutOldOpenCopies];
     });
 
     clearTradeForm();
     setTab("journal");
-    console.log("Trade result saved");
+    console.log("Trade result saved and active anchor cleared");
   };
 
   const editTrade = (item) => {
@@ -1048,17 +1186,136 @@ const exportJournalCSV = () => {
     setTab("checklist");
   };
 
+  const closestWeeklyLevelToEntry = (entryPrice) => {
+    const entry = parsePrice(entryPrice);
+    if (entry === null || weeklyLevels.length === 0) return null;
+
+    return weeklyLevels
+      .map((level) => ({ ...level, distance: Math.abs(Number(level.price) - entry) }))
+      .filter((level) => Number.isFinite(level.distance))
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  };
+
+  const closestCraterBoxToEntry = (entryPrice) => {
+    const entry = parsePrice(entryPrice);
+    if (entry === null || craterBoxes.length === 0) return null;
+
+    return craterBoxes
+      .map((box) => {
+        const top = Number(box.top_price);
+        const bottom = Number(box.bottom_price);
+        if (!Number.isFinite(top) || !Number.isFinite(bottom) || top <= 0 || bottom <= 0 || top === bottom) return null;
+        const high = Math.max(top, bottom);
+        const low = Math.min(top, bottom);
+        const mid = (high + low) / 2;
+        const width = Math.abs(high - low);
+        return { ...box, high, low, mid, width, distance: Math.abs(mid - entry) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  };
+
+  const buildFormFromAiSignal = (signal, fallbackForm) => {
+    const signalText = String(firstDefined(signal.signal, signal.side, signal.action, "AI Signal"));
+    const lowerSignal = signalText.toLowerCase();
+    const inferredDirection = lowerSignal.includes("short") || lowerSignal.includes("sell") ? "Short" : "Long";
+    const entryValue = firstDefined(signal.entry, signal.entry_price, signal.price, signal.close, signal.alert_price, fallbackForm.tradeEntryPrice, "");
+    const nearestWeekly = closestWeeklyLevelToEntry(entryValue);
+    const nearestCrater = closestCraterBoxToEntry(entryValue);
+
+    const playMakerSignalOn = parseYesNo(firstDefined(signal.playmaker_signal, signal.playMakerSignal, signal.pm_signal, signal.signal_active));
+    const liquidityOn = parseYesNo(firstDefined(signal.liquidity, signal.liquidity_on));
+    const lvnPrice = parsePrice(firstDefined(signal.lvn, signal.low_volume_node, signal.lowVolumeNode, signal.volume_node));
+    const ltfNodePrice = parsePrice(firstDefined(signal.ltf_vol_node, signal.ltf_volume_node, signal.ltfVolNode));
+    const entryNumber = parsePrice(entryValue);
+
+    const next = {
+      ...fallbackForm,
+      direction: inferredDirection,
+      tradeEntryPrice: String(entryValue || ""),
+      result: "Unfilled",
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      notes: `AI Signal: ${signalText}`,
+      tradeImages: []
+    };
+
+    if (nearestWeekly) {
+      next.prevWeekLevelOn = "Yes";
+      next.prevWeekLevelAway = String(fmt(nearestWeekly.distance));
+    }
+
+    if (nearestCrater) {
+      next.lowVolumeNodeOn = "Yes";
+      next.lowVolumeNodeWidth = String(fmt(nearestCrater.width));
+      next.lowVolumeNodeAway = String(fmt(nearestCrater.distance));
+    } else if (entryNumber !== null && lvnPrice !== null) {
+      next.lowVolumeNodeOn = "Yes";
+      next.lowVolumeNodeAway = String(fmt(Math.abs(lvnPrice - entryNumber)));
+    }
+
+    if (playMakerSignalOn) next.playMakerSignalOn = playMakerSignalOn;
+    if (liquidityOn) next.liquidityOn = liquidityOn;
+
+    const prevSessionSTDV = firstDefined(signal.stdv_session, signal.session_stdv, signal.prev_session_stdv, signal.prevSessionSTDV);
+    if (prevSessionSTDV !== undefined) {
+      next.prevSessionSTDVOn = "Yes";
+      next.prevSessionSTDVValue = normalizeSTDV(prevSessionSTDV);
+      next.prevSessionSTDVAway = String(firstDefined(signal.prev_session_stdv_away, signal.stdv_session_away, "0"));
+    }
+
+    const oneHSTDV = firstDefined(signal.stdv_1h, signal.oneHSTDV, signal.one_h_stdv);
+    if (oneHSTDV !== undefined) {
+      next.oneHSTDVOn = "Yes";
+      next.oneHSTDVValue = normalizeSTDV(oneHSTDV);
+      next.oneHSTDVAway = String(firstDefined(signal.stdv_1h_away, signal.one_h_stdv_away, "0"));
+    }
+
+    const fourHSTDV = firstDefined(signal.stdv_4h, signal.fourHSTDV, signal.four_h_stdv);
+    if (fourHSTDV !== undefined) {
+      next.fourHSTDVOn = "Yes";
+      next.fourHSTDVValue = normalizeSTDV(fourHSTDV);
+      next.fourHSTDVAway = String(firstDefined(signal.stdv_4h_away, signal.four_h_stdv_away, "0"));
+    }
+
+    const fib15 = firstDefined(signal.fib_15m, signal.retrace_15m, signal.retrace15m);
+    if (fib15 !== undefined) {
+      next.retrace15mOn = "Yes";
+      next.retrace15mValue = normalizeRetrace(fib15);
+      next.retrace15mAway = String(firstDefined(signal.fib_15m_away, signal.retrace_15m_away, "0"));
+    }
+
+    const fib1h = firstDefined(signal.fib_1h, signal.retrace_1h, signal.retrace1H);
+    if (fib1h !== undefined) {
+      next.retrace1HOn = "Yes";
+      next.retrace1HValue = normalizeRetrace(fib1h);
+      next.retrace1HAway = String(firstDefined(signal.fib_1h_away, signal.retrace_1h_away, "0"));
+    }
+
+    const fib4h = firstDefined(signal.fib_4h, signal.retrace_4h, signal.retrace4H);
+    if (fib4h !== undefined) {
+      next.retrace4HOn = "Yes";
+      next.retrace4HValue = normalizeRetrace(fib4h);
+      next.retrace4HAway = String(firstDefined(signal.fib_4h_away, signal.retrace_4h_away, "0"));
+    }
+
+    if (entryNumber !== null && ltfNodePrice !== null) {
+      next.ltfVolNodeOn = "Yes";
+      next.ltfVolNodeAway = String(fmt(Math.abs(ltfNodePrice - entryNumber)));
+    }
+
+    return { next, signalText, inferredDirection, entryValue };
+  };
+
   const selectAiSignal = (signal) => {
-    const signalText = String(signal.signal || "AI Signal");
-    const inferredDirection = signalText.toLowerCase().includes("short") || signalText.toLowerCase().includes("sell")
-      ? "Short"
-      : "Long";
+    const { next, signalText, inferredDirection, entryValue } = buildFormFromAiSignal(signal, form);
 
     const item = {
       id: `ai-${signal.id || signal.created_at || Date.now()}`,
       date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
       direction: inferredDirection,
-      entry: signal.price || form.tradeEntryPrice || "",
+      entry: entryValue || "",
       grade: "AI",
       score: 0,
       result: "Unfilled",
@@ -1078,17 +1335,9 @@ const exportJournalCSV = () => {
 
     setSelectedTrade(item);
     setEditingId(null);
-    setForm((f) => ({
-      ...f,
-      direction: item.direction,
-      tradeEntryPrice: String(item.entry || ""),
-      result: "Unfilled",
-      maxMove: "",
-      maxDrawdown: "",
-      profitLoss: "",
-      notes: item.notes,
-      tradeImages: []
-    }));
+    setForm(next);
+    if (next.playMakerSignalOn === "Yes") setStartingLevel("playMakerSignal");
+    else setStartingLevel("");
     setTab("checklist");
   };
 
@@ -1101,7 +1350,7 @@ const exportJournalCSV = () => {
   };
 
   const [letter, text] = grade(report.score);
-  const unfilledOrders = journal.filter((j) => j.result === "Unfilled" || j.orderStatus === "Unfilled");
+  const unfilledOrders = journal.filter((j) => isOpenOrder(j));
 
   const activeAnchors = [
     ...unfilledOrders.map((order) => ({
@@ -1112,7 +1361,7 @@ const exportJournalCSV = () => {
       id: `ai-${signal.id || signal.created_at || signal.signal}`,
       date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
       direction: String(signal.signal || "").toLowerCase().includes("short") || String(signal.signal || "").toLowerCase().includes("sell") ? "Short" : "Long",
-      entry: signal.price || "",
+      entry: firstDefined(signal.entry, signal.entry_price, signal.price, signal.close, signal.alert_price, ""),
       grade: "AI",
       score: "--",
       result: "Unfilled",
@@ -1509,13 +1758,11 @@ const exportJournalCSV = () => {
                     <tr><th className="p-3">Needed</th><th>Current Value</th><th>Status</th></tr>
                   </thead>
                   <tbody>
-                    <tr className="border-t border-zinc-800"><td className="p-3"><b>Saved weekly levels</b><div className="text-xs text-zinc-500">Manual weekly pillar zones</div></td><td>{weeklyLevels.length}</td><td className={weeklyLevels.length ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{weeklyLevels.length ? "Ready" : "Needed"}</td></tr>
-                    <tr className="border-t border-zinc-800"><td className="p-3"><b>Saved crater boxes</b><div className="text-xs text-zinc-500">Manual crater box pillar zones</div></td><td>{craterBoxes.length}</td><td className={craterBoxes.length ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{craterBoxes.length ? "Ready" : "Needed"}</td></tr>
                     {aiChecklist.map((row) => (
                       <tr key={row.item} className="border-t border-zinc-800">
                         <td className="p-3"><b>{row.item}</b><div className="text-xs text-zinc-500">{row.needed}</div></td>
-                        <td>{row.value || "--"}</td>
-                        <td className={row.value ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{row.value ? "Ready" : "Needed"}</td>
+                        <td>{row.value === 0 ? 0 : (row.value || "--")}</td>
+                        <td className={row.ready ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{row.status || (row.ready ? "Ready" : "Needed")}</td>
                       </tr>
                     ))}
                   </tbody>
