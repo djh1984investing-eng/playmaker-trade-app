@@ -43,25 +43,19 @@ const n = (v, f = 0) => {
   const x = Number(v);
   return Number.isFinite(x) ? x : f;
 };
-
-const parseNumericInput = (value) => {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  const cleaned = String(value ?? "")
-    .replace(/[$,\s]/g, "")
-    .trim();
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const isYes = (v) => v === "Yes";
+const fmt = (v) => Number(v).toFixed(2);
+const parsePrice = (value) => {
+  const cleaned = String(value ?? "").replace(/,/g, "").trim();
   if (!cleaned) return null;
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : null;
 };
-
-const fmtMaybe = (value, fallback = "--") => {
-  const parsed = parseNumericInput(value);
-  return parsed === null || parsed <= 0 ? fallback : parsed.toFixed(2);
+const fmtPrice = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--";
 };
-
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const isYes = (v) => v === "Yes";
-const fmt = (v) => Number(v).toFixed(2);
 
 function distanceMult(pointsAway) {
   const d = Math.abs(n(pointsAway));
@@ -261,19 +255,14 @@ useEffect(() => {
     volumeCraterTop: "",
     volumeCraterBottom: "",
     weeklyLevelPrice: "",
+    weeklyLevelName: "",
+    craterBoxName: "",
     autoUseIndicator: "Yes"
   });
   const [aiLevels, setAiLevels] = useState([]);
-  const [aiTradeMemory, setAiTradeMemory] = useState([]);
-  const [weeklyLevelForm, setWeeklyLevelForm] = useState({
-    name: "",
-    price: ""
-  });
-  const [craterBoxForm, setCraterBoxForm] = useState({
-    name: "",
-    top: "",
-    bottom: ""
-  });
+  const [editingWeeklyLevelId, setEditingWeeklyLevelId] = useState(null);
+  const [editingCraterBoxId, setEditingCraterBoxId] = useState(null);
+  const [aiLevelMessage, setAiLevelMessage] = useState("");
   const [form, setForm] = useState(getDefaultForm());
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -288,76 +277,50 @@ useEffect(() => {
   const canStart = (key) => startingOptions.includes(key);
   const startDisabled = (key) => startingLevel && startingLevel !== key;
 
-  const aiCraterSize = Math.abs(n(aiSettings.volumeCraterTop) - n(aiSettings.volumeCraterBottom));
-  const aiCraterMid = aiSettings.volumeCraterTop && aiSettings.volumeCraterBottom
-    ? (n(aiSettings.volumeCraterTop) + n(aiSettings.volumeCraterBottom)) / 2
+  const weeklyLevels = aiLevels.filter((level) => level.level_type === "weekly");
+  const craterBoxes = aiLevels.filter((level) => level.level_type === "crater");
+
+  const currentCraterTop = parsePrice(aiSettings.volumeCraterTop);
+  const currentCraterBottom = parsePrice(aiSettings.volumeCraterBottom);
+  const aiCraterSize = currentCraterTop !== null && currentCraterBottom !== null
+    ? Math.abs(currentCraterTop - currentCraterBottom)
     : 0;
-  const aiCraterAway = aiCraterMid ? Math.abs(aiCraterMid - n(form.tradeEntryPrice)) : 0;
-  const aiWeeklyAway = aiSettings.weeklyLevelPrice ? Math.abs(n(aiSettings.weeklyLevelPrice) - n(form.tradeEntryPrice)) : 0;
-  const weeklyLevels = aiLevels.filter((level) => level.level_type === "weekly_level");
-  const craterBoxes = aiLevels.filter((level) => level.level_type === "crater_box");
-
-  const validWeeklyLevels = weeklyLevels.filter((level) => {
-    const price = parseNumericInput(level.price);
-    return price !== null && price > 0;
-  });
-
-  const validCraterBoxes = craterBoxes.filter((box) => {
-    const top = parseNumericInput(box.top_price);
-    const bottom = parseNumericInput(box.bottom_price);
-    return top !== null && bottom !== null && top > 0 && bottom > 0 && top !== bottom;
-  });
-
-  const nearestWeeklyLevel = useMemo(() => {
-    const entry = parseNumericInput(form.tradeEntryPrice);
-    if (!entry || validWeeklyLevels.length === 0) return null;
-
-    return [...validWeeklyLevels]
-      .map((level) => {
-        const price = parseNumericInput(level.price);
-        return {
-          ...level,
-          price,
-          distance: Math.abs(price - entry)
-        };
-      })
-      .sort((a, b) => a.distance - b.distance)[0];
-  }, [validWeeklyLevels, form.tradeEntryPrice]);
-
-  const nearestCraterBox = useMemo(() => {
-    const entry = parseNumericInput(form.tradeEntryPrice);
-    if (!entry || validCraterBoxes.length === 0) return null;
-
-    return [...validCraterBoxes]
-      .map((box) => {
-        const top = parseNumericInput(box.top_price);
-        const bottom = parseNumericInput(box.bottom_price);
-        const high = Math.max(top, bottom);
-        const low = Math.min(top, bottom);
-        const mid = (high + low) / 2;
-        const inside = entry >= low && entry <= high;
-
-        return {
-          ...box,
-          high,
-          low,
-          mid,
-          width: Math.abs(high - low),
-          inside,
-          distance: inside ? 0 : Math.min(Math.abs(entry - high), Math.abs(entry - low))
-        };
-      })
-      .sort((a, b) => a.distance - b.distance)[0];
-  }, [validCraterBoxes, form.tradeEntryPrice]);
+  const aiCraterMid = currentCraterTop !== null && currentCraterBottom !== null
+    ? (currentCraterTop + currentCraterBottom) / 2
+    : 0;
+  const aiCraterAway = aiCraterMid && form.tradeEntryPrice
+    ? Math.abs(aiCraterMid - n(form.tradeEntryPrice))
+    : 0;
+  const currentWeeklyPrice = parsePrice(aiSettings.weeklyLevelPrice);
+  const aiWeeklyAway = currentWeeklyPrice !== null && form.tradeEntryPrice
+    ? Math.abs(currentWeeklyPrice - n(form.tradeEntryPrice))
+    : 0;
 
   const aiChecklist = [
-    { item: "Weekly levels saved", value: validWeeklyLevels.length ? `${validWeeklyLevels.length} valid levels` : "", needed: "Multiple weekly levels that update week-to-week" },
-    { item: "Crater boxes saved", value: validCraterBoxes.length ? `${validCraterBoxes.length} valid boxes` : "", needed: "Multiple crater zones for AI pillar zones" },
-    { item: "Nearest weekly level", value: nearestWeeklyLevel ? `${nearestWeeklyLevel.name || "Weekly"}: ${fmt(nearestWeeklyLevel.price)} (${fmt(nearestWeeklyLevel.distance)} pts away)` : "", needed: "AI uses closest weekly pillar" },
-    { item: "Nearest crater box", value: nearestCraterBox ? `${nearestCraterBox.name || "Crater"}: ${fmt(nearestCraterBox.low)}-${fmt(nearestCraterBox.high)} (${nearestCraterBox.inside ? "inside" : `${fmt(nearestCraterBox.distance)} pts away`})` : "", needed: "AI uses closest crater pillar" },
-    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from saved pillar zones" },
-    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with weekly/crater pillar zones" }
+    { item: "Volume crater top", value: aiSettings.volumeCraterTop, needed: "Top of manually drawn crater box" },
+    { item: "Volume crater bottom", value: aiSettings.volumeCraterBottom, needed: "Bottom of manually drawn crater box" },
+    { item: "Crater size", value: aiCraterSize ? fmt(aiCraterSize) : "", needed: "Used by AI weighting" },
+    { item: "Weekly level price", value: aiSettings.weeklyLevelPrice, needed: "Manual weekly level for AI setup checks" },
+    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from levels" },
+    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with manual AI levels" }
   ];
+
+  const fetchAiLevels = async () => {
+    if (!user) return;
+
+    const { data, error } = await supabase
+      .from("ai_levels")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("AI levels fetch error:", error);
+      setAiLevelMessage("AI levels failed to load. Check Supabase ai_levels table.");
+    } else {
+      setAiLevels(data || []);
+    }
+  };
 
   const fetchAiSignals = async () => {
     setAiLoading(true);
@@ -376,139 +339,6 @@ useEffect(() => {
       setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} AI signals.` : "No AI signals found yet.");
     }
     setAiLoading(false);
-  };
-
-  const fetchAiLevels = async () => {
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("ai_levels")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("AI levels fetch error:", error);
-      return;
-    }
-
-    setAiLevels(data || []);
-  };
-
-  const submitWeeklyLevel = async () => {
-    if (!user) {
-      alert("Please log in before saving weekly levels.");
-      return;
-    }
-
-    const price = parseNumericInput(weeklyLevelForm.price);
-
-    if (price === null || price <= 0) {
-      alert("Enter a valid weekly level price. Example: 21480 or 21,480");
-      return;
-    }
-
-    const payload = {
-      user_id: user.id,
-      level_type: "weekly_level",
-      name: weeklyLevelForm.name.trim() || "Weekly Level",
-      price,
-      top_price: null,
-      bottom_price: null
-    };
-
-    const { data, error } = await supabase
-      .from("ai_levels")
-      .insert([payload])
-      .select("*")
-      .single();
-
-    if (error) {
-      console.error("Weekly level save error:", error);
-      alert("Weekly level did not save. Check the ai_levels table.");
-      return;
-    }
-
-    setAiLevels((levels) => [data, ...levels]);
-    setWeeklyLevelForm({ name: "", price: "" });
-  };
-
-  const submitCraterBox = async () => {
-    if (!user) {
-      alert("Please log in before saving crater boxes.");
-      return;
-    }
-
-    const top = parseNumericInput(craterBoxForm.top);
-    const bottom = parseNumericInput(craterBoxForm.bottom);
-
-    if (top === null || bottom === null || top <= 0 || bottom <= 0) {
-      alert("Enter valid crater top and bottom prices. Example: 21485 and 21455");
-      return;
-    }
-
-    if (top === bottom) {
-      alert("Crater top and bottom cannot be the same price.");
-      return;
-    }
-
-    const payload = {
-      user_id: user.id,
-      level_type: "crater_box",
-      name: craterBoxForm.name.trim() || "Crater Box",
-      price: null,
-      top_price: top,
-      bottom_price: bottom
-    };
-
-    const { data, error } = await supabase
-      .from("ai_levels")
-      .insert([payload])
-      .select("*")
-      .single();
-
-    if (error) {
-      console.error("Crater box save error:", error);
-      alert("Crater box did not save. Check the ai_levels table.");
-      return;
-    }
-
-    setAiLevels((levels) => [data, ...levels]);
-    setCraterBoxForm({ name: "", top: "", bottom: "" });
-  };
-
-  const deleteAiLevel = async (levelId) => {
-    const { error } = await supabase
-      .from("ai_levels")
-      .delete()
-      .eq("id", levelId)
-      .eq("user_id", user.id);
-
-    if (error) {
-      console.error("AI level delete error:", error);
-      alert("Could not delete that AI level.");
-      return;
-    }
-
-    setAiLevels((levels) => levels.filter((level) => level.id !== levelId));
-  };
-
-
-  const fetchAiTradeMemory = async () => {
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("ai_trade_memory")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("AI trade memory fetch error:", error);
-      return;
-    }
-
-    setAiTradeMemory(data || []);
   };
 
   useEffect(() => {
@@ -547,27 +377,194 @@ useEffect(() => {
     fetchSavedJournal();
     fetchAiSignals();
     fetchAiLevels();
-    fetchAiTradeMemory();
   }, [user]);
 
-  const submitAiSettings = async () => {
-    const { error } = await supabase.from("ai_manual_inputs").insert([
-      {
-        user_id: user?.id || "djh1984investing-eng",
-        volume_crater_top: aiSettings.volumeCraterTop ? Number(aiSettings.volumeCraterTop) : null,
-        volume_crater_bottom: aiSettings.volumeCraterBottom ? Number(aiSettings.volumeCraterBottom) : null,
-        weekly_level_price: aiSettings.weeklyLevelPrice ? Number(aiSettings.weeklyLevelPrice) : null,
-        auto_use_indicator: aiSettings.autoUseIndicator === "Yes",
-        created_at: new Date().toISOString()
+  const resetAiLevelInputs = () => {
+    setAiSettings((s) => ({
+      ...s,
+      weeklyLevelName: "",
+      weeklyLevelPrice: "",
+      craterBoxName: "",
+      volumeCraterTop: "",
+      volumeCraterBottom: ""
+    }));
+    setEditingWeeklyLevelId(null);
+    setEditingCraterBoxId(null);
+  };
+
+  const saveWeeklyLevel = async () => {
+    if (!user) {
+      alert("Please log in before saving AI levels.");
+      return;
+    }
+
+    const price = parsePrice(aiSettings.weeklyLevelPrice);
+    if (price === null || price <= 0) {
+      alert("Enter a valid weekly level price.");
+      return;
+    }
+
+    const payload = {
+      user_id: user.id,
+      level_type: "weekly",
+      name: aiSettings.weeklyLevelName || "Weekly Level",
+      price,
+      top_price: null,
+      bottom_price: null
+    };
+
+    if (editingWeeklyLevelId) {
+      const { error } = await supabase
+        .from("ai_levels")
+        .update(payload)
+        .eq("id", editingWeeklyLevelId)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Weekly level update error:", error);
+        alert("Weekly level did not update.");
+        return;
       }
-    ]);
+
+      setAiLevels((levels) => levels.map((level) => level.id === editingWeeklyLevelId ? { ...level, ...payload } : level));
+      setAiLevelMessage("Weekly level updated.");
+    } else {
+      const { data, error } = await supabase
+        .from("ai_levels")
+        .insert([payload])
+        .select("*")
+        .single();
+
+      if (error) {
+        console.error("Weekly level save error:", error);
+        alert("Weekly level did not save.");
+        return;
+      }
+
+      setAiLevels((levels) => [data, ...levels]);
+      setAiLevelMessage("Weekly level saved.");
+    }
+
+    setAiSettings((s) => ({ ...s, weeklyLevelName: "", weeklyLevelPrice: "" }));
+    setEditingWeeklyLevelId(null);
+  };
+
+  const saveCraterBox = async () => {
+    if (!user) {
+      alert("Please log in before saving crater boxes.");
+      return;
+    }
+
+    const top = parsePrice(aiSettings.volumeCraterTop);
+    const bottom = parsePrice(aiSettings.volumeCraterBottom);
+
+    if (top === null || bottom === null || top <= 0 || bottom <= 0) {
+      alert("Enter valid crater top and bottom prices.");
+      return;
+    }
+
+    if (top === bottom) {
+      alert("Crater top and bottom cannot be the same price.");
+      return;
+    }
+
+    const high = Math.max(top, bottom);
+    const low = Math.min(top, bottom);
+    const payload = {
+      user_id: user.id,
+      level_type: "crater",
+      name: aiSettings.craterBoxName || "Crater Box",
+      price: null,
+      top_price: high,
+      bottom_price: low
+    };
+
+    if (editingCraterBoxId) {
+      const { error } = await supabase
+        .from("ai_levels")
+        .update(payload)
+        .eq("id", editingCraterBoxId)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Crater box update error:", error);
+        alert("Crater box did not update.");
+        return;
+      }
+
+      setAiLevels((levels) => levels.map((level) => level.id === editingCraterBoxId ? { ...level, ...payload } : level));
+      setAiLevelMessage("Crater box updated.");
+    } else {
+      const { data, error } = await supabase
+        .from("ai_levels")
+        .insert([payload])
+        .select("*")
+        .single();
+
+      if (error) {
+        console.error("Crater box save error:", error);
+        alert("Crater box did not save.");
+        return;
+      }
+
+      setAiLevels((levels) => [data, ...levels]);
+      setAiLevelMessage("Crater box saved.");
+    }
+
+    setAiSettings((s) => ({ ...s, craterBoxName: "", volumeCraterTop: "", volumeCraterBottom: "" }));
+    setEditingCraterBoxId(null);
+  };
+
+  const editWeeklyLevel = (level) => {
+    setEditingWeeklyLevelId(level.id);
+    setEditingCraterBoxId(null);
+    setAiSettings((s) => ({
+      ...s,
+      weeklyLevelName: level.name || "Weekly Level",
+      weeklyLevelPrice: level.price ? String(level.price) : ""
+    }));
+    setAiLevelMessage("Editing weekly level.");
+  };
+
+  const editCraterBox = (box) => {
+    setEditingCraterBoxId(box.id);
+    setEditingWeeklyLevelId(null);
+    setAiSettings((s) => ({
+      ...s,
+      craterBoxName: box.name || "Crater Box",
+      volumeCraterTop: box.top_price ? String(box.top_price) : "",
+      volumeCraterBottom: box.bottom_price ? String(box.bottom_price) : ""
+    }));
+    setAiLevelMessage("Editing crater box.");
+  };
+
+  const deleteAiLevel = async (level) => {
+    if (!user) return;
+
+    const { error } = await supabase
+      .from("ai_levels")
+      .delete()
+      .eq("id", level.id)
+      .eq("user_id", user.id);
 
     if (error) {
-      console.error("AI settings save error:", error);
-      alert("AI settings did not save. Check Supabase table ai_manual_inputs.");
-    } else {
-      alert("AI settings saved.");
+      console.error("AI level delete error:", error);
+      alert("Delete failed.");
+      return;
     }
+
+    setAiLevels((levels) => levels.filter((item) => item.id !== level.id));
+    if (editingWeeklyLevelId === level.id || editingCraterBoxId === level.id) {
+      resetAiLevelInputs();
+    }
+    setAiLevelMessage("AI level deleted.");
+  };
+
+  const submitAiSettings = async () => {
+    await Promise.all([
+      aiSettings.weeklyLevelPrice ? saveWeeklyLevel() : Promise.resolve(),
+      (aiSettings.volumeCraterTop || aiSettings.volumeCraterBottom) ? saveCraterBox() : Promise.resolve()
+    ]);
   };
 
   const isRecentSignal = (createdAt) => {
@@ -702,47 +699,6 @@ useEffect(() => {
       confluences: active.length
     };
   }, [form, startingLevel]);
-
-  const memoryStats = useMemo(() => {
-    const closed = aiTradeMemory.filter((trade) => ["Win", "Loss", "BE"].includes(trade.result));
-    const wins = closed.filter((trade) => trade.result === "Win").length;
-    const losses = closed.filter((trade) => trade.result === "Loss").length;
-    const be = closed.filter((trade) => trade.result === "BE").length;
-    const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-
-    const currentKeys = new Set(report?.active?.map((row) => row.key) || []);
-    const similar = closed.filter((trade) => {
-      const confs = Array.isArray(trade.confluences) ? trade.confluences : [];
-      return confs.some((row) => currentKeys.has(row.key));
-    });
-    const similarWins = similar.filter((trade) => trade.result === "Win").length;
-    const similarWinRate = similar.length ? Math.round((similarWins / similar.length) * 100) : 0;
-
-    let adjustment = 0;
-    if (similar.length >= 5) {
-      if (similarWinRate >= 70) adjustment = 6;
-      else if (similarWinRate >= 60) adjustment = 3;
-      else if (similarWinRate <= 35) adjustment = -6;
-      else if (similarWinRate <= 45) adjustment = -3;
-    } else if (closed.length >= 10) {
-      if (winRate >= 65) adjustment = 2;
-      else if (winRate <= 40) adjustment = -2;
-    }
-
-    return {
-      total: closed.length,
-      wins,
-      losses,
-      be,
-      winRate,
-      similar: similar.length,
-      similarWinRate,
-      adjustment,
-      confidence: clamp((report?.score || 0) + adjustment, 0, 100)
-    };
-  }, [aiTradeMemory, report]);
-
-
 
   const recommendations = useMemo(() => {
     const entry = n(form.tradeEntryPrice);
@@ -962,48 +918,6 @@ const exportJournalCSV = () => {
     screenshots: item.tradeImages || []
   });
 
-
-  const tradeMemoryPayload = (item) => ({
-    user_id: user.id,
-    source_type: item.sourceType || "Manual Order",
-    signal_id: item.signal_id || null,
-    symbol: "NQ",
-    direction: item.direction,
-    entry_price: Number(item.entry) || null,
-    grade: item.grade,
-    score: item.score,
-    result: item.result,
-    max_move: Number(item.maxMove) || null,
-    max_drawdown: Number(item.maxDrawdown) || null,
-    profit_loss: Number(item.profitLoss) || null,
-    confluences: report.active,
-    recommendations,
-    notes: item.notes
-  });
-
-  const saveTradeToAiMemory = async (item) => {
-    if (!user) return;
-    if (!["Win", "Loss", "BE"].includes(item.result)) return;
-
-    const payload = tradeMemoryPayload(item);
-
-    const { data, error } = await supabase
-      .from("ai_trade_memory")
-      .insert([payload])
-      .select("*")
-      .single();
-
-    if (error) {
-      console.error("AI memory save error:", error);
-      alert("Trade saved, but AI memory did not update. Check ai_trade_memory table columns.");
-      return;
-    }
-
-    if (data) {
-      setAiTradeMemory((memory) => [data, ...memory]);
-    }
-  };
-
   const clearTradeForm = () => {
     const next = getDefaultForm();
     next.tradeEntryPrice = "";
@@ -1091,7 +1005,6 @@ const exportJournalCSV = () => {
     const item = makeJournalItem(form.result);
     const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
     const savedItem = await saveTradeToDatabase(item, isReportingExisting);
-    await saveTradeToAiMemory(savedItem);
 
     setJournal((j) => {
       const withoutOld = j.filter((x) => x.id !== item.id);
@@ -1163,61 +1076,12 @@ const exportJournalCSV = () => {
       formSnapshot: null
     };
 
-    const getSignalValue = (...keys) => {
-      for (const key of keys) {
-        if (signal?.[key] !== undefined && signal?.[key] !== null && signal?.[key] !== "") return signal[key];
-      }
-      return "";
-    };
-
-    const yesNo = (value) => {
-      const text = String(value || "").toLowerCase();
-      return text === "yes" || text === "true" || text === "1" || text === "long" || text === "short" ? "Yes" : "No";
-    };
-
-    const fib15 = getSignalValue("fib_15m", "retrace15m", "retrace_15m", "fib15");
-    const fib1h = getSignalValue("fib_1h", "retrace1h", "retrace_1h", "fib1h");
-    const fib4h = getSignalValue("fib_4h", "retrace4h", "retrace_4h", "fib4h");
-    const stdvSession = getSignalValue("stdv_session", "prev_session_stdv", "prevSessionSTDV", "session_stdv");
-    const stdvPrior = getSignalValue("prior_session_stdv", "priorSessionSTDV");
-    const stdv1h = getSignalValue("stdv_1h", "oneHSTDV", "stdv1h");
-    const stdv4h = getSignalValue("stdv_4h", "fourHSTDV", "stdv4h");
-    const lvnPrice = getSignalValue("lvn", "low_volume_node", "lowVolumeNode", "volume_crater_mid");
-    const playmakerSignal = getSignalValue("playmaker_signal", "playMakerSignal", "signal");
-    const liquidity = getSignalValue("liquidity", "has_liquidity");
-
-    setSelectedTrade({ ...item, rawSignal: signal });
+    setSelectedTrade(item);
     setEditingId(null);
     setForm((f) => ({
       ...f,
       direction: item.direction,
       tradeEntryPrice: String(item.entry || ""),
-      playMakerSignalOn: yesNo(playmakerSignal),
-      playMakerSignalAway: "0",
-      lowVolumeNodeOn: lvnPrice ? "Yes" : f.lowVolumeNodeOn,
-      lowVolumeNodeAway: lvnPrice && item.entry ? String(Math.abs(n(lvnPrice) - n(item.entry))) : f.lowVolumeNodeAway,
-      prevSessionSTDVOn: stdvSession ? "Yes" : f.prevSessionSTDVOn,
-      prevSessionSTDVValue: stdvSession ? String(stdvSession) : f.prevSessionSTDVValue,
-      prevSessionSTDVAway: "0",
-      priorSessionSTDVOn: stdvPrior ? "Yes" : f.priorSessionSTDVOn,
-      priorSessionSTDVValue: stdvPrior ? String(stdvPrior) : f.priorSessionSTDVValue,
-      priorSessionSTDVAway: "0",
-      oneHSTDVOn: stdv1h ? "Yes" : f.oneHSTDVOn,
-      oneHSTDVValue: stdv1h ? String(stdv1h) : f.oneHSTDVValue,
-      oneHSTDVAway: "0",
-      fourHSTDVOn: stdv4h ? "Yes" : f.fourHSTDVOn,
-      fourHSTDVValue: stdv4h ? String(stdv4h) : f.fourHSTDVValue,
-      fourHSTDVAway: "0",
-      retrace15mOn: fib15 ? "Yes" : f.retrace15mOn,
-      retrace15mValue: fib15 ? String(fib15) : f.retrace15mValue,
-      retrace15mAway: "0",
-      retrace1HOn: fib1h ? "Yes" : f.retrace1HOn,
-      retrace1HValue: fib1h ? String(fib1h) : f.retrace1HValue,
-      retrace1HAway: "0",
-      retrace4HOn: fib4h ? "Yes" : f.retrace4HOn,
-      retrace4HValue: fib4h ? String(fib4h) : f.retrace4HValue,
-      retrace4HAway: "0",
-      liquidityOn: yesNo(liquidity),
       result: "Unfilled",
       maxMove: "",
       maxDrawdown: "",
@@ -1322,21 +1186,11 @@ const exportJournalCSV = () => {
 
   return (
     <WhopGate>
-    <div className="relative min-h-screen bg-[#080808] text-white">
-      <div className="fixed right-4 top-4 z-50 flex items-center gap-3 rounded-2xl border border-[#2c2300] bg-black/90 px-4 py-3 shadow-xl shadow-black/50">
-        <div className="text-right">
-          <div className="text-[10px] font-black uppercase tracking-[0.22em] text-[#ffcc19]">Account</div>
-          <div className="max-w-[210px] truncate text-xs text-zinc-300">{user?.email}</div>
-        </div>
-        <button onClick={signOut} className="rounded-xl border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]">Logout</button>
-      </div>
-      <div className="mx-auto max-w-[1500px] p-4 pt-24 md:p-6 md:pt-20">
+    <div className="min-h-screen bg-[#080808] text-white">
+      <div className="mx-auto max-w-[1500px] p-4 md:p-6">
         <div className="grid gap-5 lg:grid-cols-[1fr_230px]">
           <div>
-            <div className="mb-5 flex items-center gap-3 text-[#ffcc19]">
-              <CrownMark />
-              <div className="font-black tracking-[0.24em] text-sm">THE PLAYMAKER</div>
-            </div>
+            <div className="mb-5 text-[#ffcc19] font-black tracking-[0.24em] text-sm">♕ THE PLAYMAKER</div>
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
           </div>
@@ -1364,7 +1218,6 @@ const exportJournalCSV = () => {
               <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ACTIVE TRADE ANCHOR</div>
               <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
               <div className="mt-1 text-sm text-zinc-400">Starting Level: {startingLevel || "None selected"} • Top 3 within 5 pts: {report.topWithin5}/3 • Far levels: {report.farCount}</div>
-              <div className="mt-2 text-xs text-zinc-500">AI pillars: {validWeeklyLevels.length} weekly levels • {validCraterBoxes.length} crater boxes</div>
             </div>
             <div className="grid gap-2 text-sm text-zinc-300 md:grid-cols-3">
               {recommendations.map((r) => (
@@ -1540,40 +1393,115 @@ const exportJournalCSV = () => {
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
             <Card>
               <Title>AI Pillar Zones</Title>
-              <p className="mt-2 text-zinc-400">Save multiple weekly levels and crater boxes. These are the weekly foundation zones the AI uses until you delete or replace them.</p>
+              <p className="mt-2 text-zinc-400">Save multiple weekly levels and crater boxes. These are the foundation zones the AI uses with TradingView alerts.</p>
 
-              <div className="mt-5 rounded-2xl border border-[#2c2300] bg-[#090909] p-4">
-                <div className="text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Add Weekly Level</div>
+              {aiLevelMessage && <div className="mt-4 rounded-xl border border-[#2c2300] bg-[#090909] p-3 text-sm text-[#ffcc19]">{aiLevelMessage}</div>}
+
+              <div className="mt-5 rounded-2xl border border-zinc-800 bg-[#090909] p-4">
+                <h3 className="text-lg font-black text-[#ffcc19]">Weekly Level</h3>
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
-                  <Field label="Level Name" value={weeklyLevelForm.name} onChange={(v) => setWeeklyLevelForm((level) => ({ ...level, name: v }))} />
-                  <Field label="Price" value={weeklyLevelForm.price} onChange={(v) => setWeeklyLevelForm((level) => ({ ...level, price: v }))} />
+                  <Field label="Weekly Level Name" value={aiSettings.weeklyLevelName} onChange={(v) => setAiSettings((s) => ({ ...s, weeklyLevelName: v }))} />
+                  <Field label="Weekly Level Price" value={aiSettings.weeklyLevelPrice} onChange={(v) => setAiSettings((s) => ({ ...s, weeklyLevelPrice: v }))} />
                 </div>
-                <button onClick={submitWeeklyLevel} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Save Weekly Level</button>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button onClick={saveWeeklyLevel} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">
+                    {editingWeeklyLevelId ? "Update Weekly Level" : "Save Weekly Level"}
+                  </button>
+                  {editingWeeklyLevelId && <button onClick={resetAiLevelInputs} className="rounded-xl border border-zinc-700 px-5 py-3 font-black text-zinc-200">Cancel Edit</button>}
+                </div>
               </div>
 
-              <div className="mt-5 rounded-2xl border border-[#2c2300] bg-[#090909] p-4">
-                <div className="text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Add Crater Box</div>
+              <div className="mt-5 rounded-2xl border border-zinc-800 bg-[#090909] p-4">
+                <h3 className="text-lg font-black text-[#ffcc19]">Crater Box</h3>
                 <div className="mt-4 grid gap-4 md:grid-cols-3">
-                  <Field label="Box Name" value={craterBoxForm.name} onChange={(v) => setCraterBoxForm((box) => ({ ...box, name: v }))} />
-                  <Field label="Top Price" value={craterBoxForm.top} onChange={(v) => setCraterBoxForm((box) => ({ ...box, top: v }))} />
-                  <Field label="Bottom Price" value={craterBoxForm.bottom} onChange={(v) => setCraterBoxForm((box) => ({ ...box, bottom: v }))} />
+                  <Field label="Crater Box Name" value={aiSettings.craterBoxName} onChange={(v) => setAiSettings((s) => ({ ...s, craterBoxName: v }))} />
+                  <Field label="Crater Top Price" value={aiSettings.volumeCraterTop} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterTop: v }))} />
+                  <Field label="Crater Bottom Price" value={aiSettings.volumeCraterBottom} onChange={(v) => setAiSettings((s) => ({ ...s, volumeCraterBottom: v }))} />
                 </div>
-                <button onClick={submitCraterBox} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Save Crater Box</button>
-              </div>
-
-              <div className="mt-5 grid gap-3 md:grid-cols-3">
-                <Small label="Weekly Levels" value={validWeeklyLevels.length} />
-                <Small label="Crater Boxes" value={validCraterBoxes.length} />
-                <Small label="Auto Signals" value={aiSettings.autoUseIndicator} />
+                <div className="mt-5 grid gap-3 md:grid-cols-3">
+                  <Small label="Crater Width" value={aiCraterSize ? `${fmt(aiCraterSize)} pts` : "--"} />
+                  <Small label="Crater Mid" value={aiCraterMid ? fmtPrice(aiCraterMid) : "--"} />
+                  <Small label="Crater Mid Away" value={aiCraterAway ? `${fmt(aiCraterAway)} pts` : "--"} />
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button onClick={saveCraterBox} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">
+                    {editingCraterBoxId ? "Update Crater Box" : "Save Crater Box"}
+                  </button>
+                  {editingCraterBoxId && <button onClick={resetAiLevelInputs} className="rounded-xl border border-zinc-700 px-5 py-3 font-black text-zinc-200">Cancel Edit</button>}
+                </div>
               </div>
 
               <div className="mt-5">
                 <Select label="Use Indicator Auto Signals" value={aiSettings.autoUseIndicator} options={["Yes", "No"]} onChange={(v) => setAiSettings((s) => ({ ...s, autoUseIndicator: v }))} />
-                <button onClick={submitAiSettings} className="mt-4 rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19] hover:bg-[#171200]">Save Indicator Setting</button>
               </div>
             </Card>
 
             <Card>
+              <Title>Saved AI Pillars</Title>
+              <div className="mt-5">
+                <h3 className="font-black text-[#ffcc19]">Weekly Levels</h3>
+                <div className="mt-3 space-y-3">
+                  {weeklyLevels.length === 0 && <div className="text-sm text-zinc-500">No weekly levels saved.</div>}
+                  {weeklyLevels.map((level) => (
+                    <div key={level.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-black text-white">{level.name || "Weekly Level"}</div>
+                          <div className="mt-1 text-sm text-zinc-400">Price: {fmtPrice(level.price)}</div>
+                          <div className="mt-1 text-xs text-zinc-500">Away from entry: {form.tradeEntryPrice && level.price ? `${fmt(Math.abs(Number(level.price) - n(form.tradeEntryPrice)))} pts` : "--"}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => editWeeklyLevel(level)} className="rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19]">Edit</button>
+                          <button onClick={() => deleteAiLevel(level)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400">Delete</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-7">
+                <h3 className="font-black text-[#ffcc19]">Crater Boxes</h3>
+                <div className="mt-3 space-y-3">
+                  {craterBoxes.length === 0 && <div className="text-sm text-zinc-500">No crater boxes saved.</div>}
+                  {craterBoxes.map((box) => {
+                    const top = Number(box.top_price);
+                    const bottom = Number(box.bottom_price);
+                    const valid = Number.isFinite(top) && Number.isFinite(bottom) && top > 0 && bottom > 0 && top !== bottom;
+                    const high = valid ? Math.max(top, bottom) : 0;
+                    const low = valid ? Math.min(top, bottom) : 0;
+                    const mid = valid ? (high + low) / 2 : 0;
+                    const width = valid ? Math.abs(high - low) : 0;
+                    const away = valid && form.tradeEntryPrice ? Math.abs(mid - n(form.tradeEntryPrice)) : 0;
+
+                    return (
+                      <div key={box.id} className={`rounded-xl border bg-[#090909] p-4 ${valid ? "border-zinc-800" : "border-red-500"}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-black text-white">{box.name || "Crater Box"}</div>
+                            {valid ? (
+                              <>
+                                <div className="mt-1 text-sm text-zinc-400">Top: {fmtPrice(high)} • Bottom: {fmtPrice(low)}</div>
+                                <div className="mt-1 text-sm text-zinc-400">Mid: {fmtPrice(mid)} • Width: {fmt(width)} pts</div>
+                                <div className="mt-1 text-xs text-zinc-500">Mid away from entry: {away ? `${fmt(away)} pts` : "--"}</div>
+                              </>
+                            ) : (
+                              <div className="mt-1 text-sm text-red-400">Invalid crater values. Edit or delete this box.</div>
+                            )}
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => editCraterBox(box)} className="rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19]">Edit</button>
+                            <button onClick={() => deleteAiLevel(box)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400">Delete</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-2">
               <Title>AI Setup Checklist Chart</Title>
               <div className="mt-5 overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -1581,6 +1509,8 @@ const exportJournalCSV = () => {
                     <tr><th className="p-3">Needed</th><th>Current Value</th><th>Status</th></tr>
                   </thead>
                   <tbody>
+                    <tr className="border-t border-zinc-800"><td className="p-3"><b>Saved weekly levels</b><div className="text-xs text-zinc-500">Manual weekly pillar zones</div></td><td>{weeklyLevels.length}</td><td className={weeklyLevels.length ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{weeklyLevels.length ? "Ready" : "Needed"}</td></tr>
+                    <tr className="border-t border-zinc-800"><td className="p-3"><b>Saved crater boxes</b><div className="text-xs text-zinc-500">Manual crater box pillar zones</div></td><td>{craterBoxes.length}</td><td className={craterBoxes.length ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{craterBoxes.length ? "Ready" : "Needed"}</td></tr>
                     {aiChecklist.map((row) => (
                       <tr key={row.item} className="border-t border-zinc-800">
                         <td className="p-3"><b>{row.item}</b><div className="text-xs text-zinc-500">{row.needed}</div></td>
@@ -1590,83 +1520,6 @@ const exportJournalCSV = () => {
                     ))}
                   </tbody>
                 </table>
-              </div>
-            </Card>
-
-            <Card className="lg:col-span-2">
-              <Title>Saved AI Pillar Zones</Title>
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <div>
-                  <div className="mb-3 text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
-                  <div className="space-y-3">
-                    {weeklyLevels.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No weekly levels saved yet.</div>}
-                    {weeklyLevels.map((level) => (
-                      <div key={level.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <b className="text-[#ffcc19]">{level.name || "Weekly Level"}</b>
-                            <div className="mt-1 text-sm text-zinc-300">Price: {fmtMaybe(level.price)}</div>
-                            <div className="mt-1 text-xs text-zinc-500">{level.created_at ? new Date(level.created_at).toLocaleDateString() : ""}</div>
-                          </div>
-                          <button onClick={() => deleteAiLevel(level.id)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30">Delete</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-3 text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Crater Boxes</div>
-                  <div className="space-y-3">
-                    {craterBoxes.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No crater boxes saved yet.</div>}
-                    {craterBoxes.map((box) => {
-                      const top = parseNumericInput(box.top_price);
-                      const bottom = parseNumericInput(box.bottom_price);
-                      const validBox = top !== null && bottom !== null && top > 0 && bottom > 0 && top !== bottom;
-                      const width = validBox ? Math.abs(top - bottom) : null;
-                      return (
-                        <div key={box.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <b className="text-[#ffcc19]">{box.name || "Crater Box"}</b>
-                              <div className="mt-1 text-sm text-zinc-300">Top: {validBox ? fmt(top) : "--"} • Bottom: {validBox ? fmt(bottom) : "--"}</div>
-                              <div className="mt-1 text-xs text-zinc-500">Width: {validBox ? `${fmt(width)} pts` : "Invalid saved values"} • {box.created_at ? new Date(box.created_at).toLocaleDateString() : ""}</div>
-                            </div>
-                            <button onClick={() => deleteAiLevel(box.id)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30">Delete</button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </Card>
-
-            <Card className="lg:col-span-2">
-              <Title>AI Learning Memory</Title>
-              <p className="mt-2 text-zinc-400">Manual results and AI signal results save here. This adjusts future confidence without replacing the PlayMaker rule score.</p>
-              <div className="mt-5 grid gap-3 md:grid-cols-5">
-                <Small label="Closed Trades" value={memoryStats.total} />
-                <Small label="Wins" value={memoryStats.wins} />
-                <Small label="Losses" value={memoryStats.losses} />
-                <Small label="Win Rate" value={`${memoryStats.winRate}%`} />
-                <Small label="AI Confidence" value={`${memoryStats.confidence}/100`} />
-              </div>
-              <div className="mt-4 rounded-xl border border-[#2c2300] bg-[#090909] p-4 text-sm text-zinc-300">
-                Current memory adjustment: <b className="text-[#ffcc19]">{memoryStats.adjustment >= 0 ? `+${memoryStats.adjustment}` : memoryStats.adjustment}</b>. Similar setup sample: {memoryStats.similar} trades • {memoryStats.similarWinRate}% win rate.
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {aiTradeMemory.slice(0, 6).map((memory) => (
-                  <div key={memory.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <b className="text-[#ffcc19]">{memory.source_type || "Trade"}</b>
-                      <span className={`rounded-full px-3 py-1 text-xs font-black ${memory.result === "Win" ? "bg-[#00d27a] text-black" : memory.result === "Loss" ? "bg-red-900 text-red-200" : "bg-zinc-800 text-zinc-300"}`}>{memory.result}</span>
-                    </div>
-                    <div className="mt-2 text-zinc-400">{memory.direction || "--"} • {memory.entry_price || "--"} • Score {memory.score || "--"}</div>
-                    <div className="mt-1 text-xs text-zinc-500">{memory.created_at ? new Date(memory.created_at).toLocaleString() : ""}</div>
-                  </div>
-                ))}
-                {aiTradeMemory.length === 0 && <div className="rounded-xl border border-zinc-800 bg-[#090909] p-4 text-zinc-500">No AI learning results saved yet. Report Win/Loss/BE trades to start memory.</div>}
               </div>
             </Card>
 
@@ -1710,19 +1563,6 @@ const exportJournalCSV = () => {
       </div>
     </div>
     </WhopGate>
-  );
-}
-
-function CrownMark() {
-  return (
-    <svg width="38" height="30" viewBox="0 0 76 60" fill="none" aria-label="Playmaker crown">
-      <path d="M8 48L14 19L29 35L38 10L47 35L62 19L68 48H8Z" fill="#ffcc19" />
-      <path d="M10 52H66" stroke="#ffcc19" strokeWidth="7" strokeLinecap="round" />
-      <circle cx="14" cy="17" r="5" fill="#ffcc19" />
-      <circle cx="38" cy="9" r="5" fill="#ffcc19" />
-      <circle cx="62" cy="17" r="5" fill="#ffcc19" />
-      <path d="M22 45H54" stroke="#080808" strokeWidth="4" strokeLinecap="round" opacity="0.65" />
-    </svg>
   );
 }
 
