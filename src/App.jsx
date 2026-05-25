@@ -379,7 +379,7 @@ useEffect(() => {
     setAiLoading(true);
     setAiFetchMessage("");
     const { data, error } = await supabase
-      .from("ai_signals")
+      .from("playmaker_signals")
       .select("*")
       .eq("user_id", "djh1984investing-eng")
       .order("created_at", { ascending: false });
