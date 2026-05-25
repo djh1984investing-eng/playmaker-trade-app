@@ -57,26 +57,37 @@ const fmtPrice = (value) => {
   return Number.isFinite(parsed) ? parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--";
 };
 
+const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+
+const parseYesNo = (value) => {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["yes", "true", "1", "y", "on", "bullish", "long", "buy"].includes(text)) return "Yes";
+  if (["no", "false", "0", "n", "off", "bearish", "short", "sell"].includes(text)) return "No";
+  return null;
+};
+
+const normalizeRetrace = (value) => {
+  const parsed = parsePrice(value);
+  if (parsed === null) return "None";
+  const abs = Math.abs(parsed);
+  const choices = [0.5, 0.618, 0.705, 0.786];
+  const closest = choices.reduce((best, cur) => Math.abs(cur - abs) < Math.abs(best - abs) ? cur : best, choices[0]);
+  return closest === 0.5 ? "0.50" : String(closest);
+};
+
+const normalizeSTDV = (value) => {
+  const parsed = parsePrice(value);
+  if (parsed === null) return "0";
+  return String(parsed);
+};
+
 const normalizeStatus = (value) => String(value ?? "").trim().toLowerCase();
 
 const isOpenOrder = (item) => {
   const result = normalizeStatus(item?.result);
   const orderStatus = normalizeStatus(item?.orderStatus);
 
-  // These are final/report states. They should NEVER appear in Active Trade Anchors.
-  if ([
-    "win",
-    "loss",
-    "be",
-    "filled",
-    "no fill",
-    "nofill",
-    "not filled",
-    "reported",
-    "closed",
-    "cancelled",
-    "canceled"
-  ].includes(result)) {
+  if (["win", "loss", "be", "filled", "reported", "closed", "cancelled", "canceled"].includes(result)) {
     return false;
   }
 
@@ -84,9 +95,7 @@ const isOpenOrder = (item) => {
     return false;
   }
 
-  // Only true submitted orders/signals remain active.
-  // A journal/report save that says "No Fill" or "Filled" is closed, not active.
-  return (result === "unfilled" || result === "edge") && orderStatus !== "reported";
+  return result === "unfilled" || result === "edge" || orderStatus === "unfilled" || item?.pendingOrder === true;
 };
 
 const sameTradeAnchor = (a, b) => {
@@ -349,13 +358,52 @@ useEffect(() => {
     ? Math.abs(currentWeeklyPrice - n(form.tradeEntryPrice))
     : 0;
 
+  const automationOn = aiSettings.autoUseIndicator === "Yes";
+  const hasTradeEntry = parsePrice(form.tradeEntryPrice) !== null;
+
   const aiChecklist = [
-    { item: "Volume crater top", value: aiSettings.volumeCraterTop, needed: "Top of manually drawn crater box" },
-    { item: "Volume crater bottom", value: aiSettings.volumeCraterBottom, needed: "Bottom of manually drawn crater box" },
-    { item: "Crater size", value: aiCraterSize ? fmt(aiCraterSize) : "", needed: "Used by AI weighting" },
-    { item: "Weekly level price", value: aiSettings.weeklyLevelPrice, needed: "Manual weekly level for AI setup checks" },
-    { item: "Trade entry price", value: form.tradeEntryPrice, needed: "Used to calculate distance from levels" },
-    { item: "Indicator automation", value: aiSettings.autoUseIndicator, needed: "Lets webhook signals combine with manual AI levels" }
+    {
+      item: "Saved weekly levels",
+      value: weeklyLevels.length,
+      needed: "Manual weekly pillar zones",
+      ready: weeklyLevels.length > 0,
+      status: weeklyLevels.length > 0 ? "Ready" : "Needed"
+    },
+    {
+      item: "Saved crater boxes",
+      value: craterBoxes.length,
+      needed: "Manual crater box pillar zones",
+      ready: craterBoxes.length > 0,
+      status: craterBoxes.length > 0 ? "Ready" : "Needed"
+    },
+    {
+      item: "Draft crater input",
+      value: aiCraterSize ? `${fmt(aiCraterSize)} pts wide / Mid ${fmtPrice(aiCraterMid)}` : "Optional — saved crater boxes already loaded",
+      needed: craterBoxes.length > 0 ? "Not required. Only type here when adding or editing a crater box." : "Add at least one crater box pillar zone.",
+      ready: craterBoxes.length > 0 || aiCraterSize > 0,
+      status: craterBoxes.length > 0 ? "Optional" : (aiCraterSize > 0 ? "Ready" : "Needed")
+    },
+    {
+      item: "Draft weekly input",
+      value: currentWeeklyPrice !== null ? fmtPrice(currentWeeklyPrice) : "Optional — saved weekly levels already loaded",
+      needed: weeklyLevels.length > 0 ? "Not required. Only type here when adding or editing a weekly level." : "Add at least one weekly level pillar zone.",
+      ready: weeklyLevels.length > 0 || currentWeeklyPrice !== null,
+      status: weeklyLevels.length > 0 ? "Optional" : (currentWeeklyPrice !== null ? "Ready" : "Needed")
+    },
+    {
+      item: "Entry source",
+      value: automationOn ? "Auto from TradingView alert" : (hasTradeEntry ? fmtPrice(parsePrice(form.tradeEntryPrice)) : "Manual entry needed"),
+      needed: automationOn ? "No manual entry needed. TradingView supplies the trade price when an alert fires." : "Manual mode needs an entry price typed before scoring.",
+      ready: automationOn || hasTradeEntry,
+      status: automationOn ? "Auto" : (hasTradeEntry ? "Ready" : "Needed")
+    },
+    {
+      item: "Indicator automation",
+      value: aiSettings.autoUseIndicator,
+      needed: "Lets webhook signals combine with saved AI pillar zones",
+      ready: true,
+      status: aiSettings.autoUseIndicator === "Yes" ? "Ready" : "Manual"
+    }
   ];
 
   const fetchAiLevels = async () => {
@@ -920,19 +968,7 @@ const exportJournalCSV = () => {
   const printSetup = () => window.print();
 
   const makeJournalItem = (resultOverride = form.result, extra = {}) => {
-    const rawResult = String(resultOverride || "Unfilled");
-    const closeAnchor = extra.closeAnchor === true;
-
-    // Submit Order uses Unfilled to keep an active anchor.
-    // Report Result uses closeAnchor. If the report result is still "Unfilled",
-    // treat it as "No Fill" so it is archived and cannot come back as active after refresh.
-    const normalizedResult =
-      closeAnchor && (rawResult === "Unfilled" || rawResult === "Edge")
-        ? "No Fill"
-        : rawResult === "Edge"
-          ? "Unfilled"
-          : rawResult;
-
+    const normalizedResult = resultOverride === "Edge" || resultOverride === "Unfilled" ? "Unfilled" : resultOverride;
     const sourceType = extra.sourceType || selectedTrade?.sourceType || "Manual Order";
     const signalName = extra.signalName || selectedTrade?.signalName || selectedTrade?.signal || "";
     const baseNotes = form.notes || "";
@@ -940,8 +976,6 @@ const exportJournalCSV = () => {
       sourceType === "AI Signal" && signalName && !baseNotes.includes(`AI Signal: ${signalName}`)
         ? `AI Signal: ${signalName}${baseNotes ? ` — ${baseNotes}` : ""}`
         : baseNotes;
-
-    const reported = closeAnchor || normalizedResult !== "Unfilled";
 
     return {
       id: extra.id || selectedTrade?.id || editingId || Date.now(),
@@ -951,8 +985,8 @@ const exportJournalCSV = () => {
       grade: grade(report.score)[0],
       score: report.score,
       result: normalizedResult,
-      orderStatus: reported ? "Reported" : "Unfilled",
-      pendingOrder: !reported,
+      orderStatus: normalizedResult === "Unfilled" ? "Unfilled" : "Reported",
+      pendingOrder: normalizedResult === "Unfilled",
       maxMove: form.maxMove,
       maxDrawdown: form.maxDrawdown,
       profitLoss: form.profitLoss,
@@ -1058,32 +1092,6 @@ const exportJournalCSV = () => {
     return savedItem;
   };
 
-  const deleteMatchingOpenOrdersFromDatabase = async (item) => {
-    if (!user || isOpenOrder(item)) return;
-
-    const entry = Number(String(item.entry || "").replace(/,/g, ""));
-    if (!Number.isFinite(entry) || !item.direction) return;
-
-    // Defensive cleanup: if an older duplicate Unfilled row exists in Supabase,
-    // delete it so it cannot reappear after refresh.
-    let query = supabase
-      .from("trade_journal")
-      .delete()
-      .eq("user_id", user.id)
-      .eq("direction", item.direction)
-      .eq("entry_price", entry)
-      .eq("result", "Unfilled");
-
-    if (item.id) {
-      query = query.neq("id", item.id);
-    }
-
-    const { error } = await query;
-    if (error) {
-      console.error("Open order cleanup error:", error);
-    }
-  };
-
   const saveTradeMemory = async (item) => {
     if (!user || isOpenOrder(item)) return;
 
@@ -1127,18 +1135,17 @@ const exportJournalCSV = () => {
   };
 
   const saveTrade = async () => {
-    // Saving from the Journal report form means the active anchor is finished.
-    // Even if the selected result is "Unfilled", it should be archived as "No Fill"
-    // and removed from Active Trade Anchors.
-    const item = makeJournalItem(form.result, { closeAnchor: true });
+    const item = makeJournalItem(form.result);
     const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
     const savedItem = await saveTradeToDatabase(item, isReportingExisting);
 
-    await deleteMatchingOpenOrdersFromDatabase(savedItem);
     await saveTradeMemory(savedItem);
 
     setJournal((j) => {
       const withoutOldOpenCopies = j.filter((x) => !sameTradeAnchor(x, savedItem));
+
+      // Closed/filled/reported orders stay in the Journal table, but they no longer qualify
+      // for Active Trade Anchors because isOpenOrder() returns false for them.
       return [savedItem, ...withoutOldOpenCopies];
     });
 
@@ -1179,17 +1186,136 @@ const exportJournalCSV = () => {
     setTab("checklist");
   };
 
+  const closestWeeklyLevelToEntry = (entryPrice) => {
+    const entry = parsePrice(entryPrice);
+    if (entry === null || weeklyLevels.length === 0) return null;
+
+    return weeklyLevels
+      .map((level) => ({ ...level, distance: Math.abs(Number(level.price) - entry) }))
+      .filter((level) => Number.isFinite(level.distance))
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  };
+
+  const closestCraterBoxToEntry = (entryPrice) => {
+    const entry = parsePrice(entryPrice);
+    if (entry === null || craterBoxes.length === 0) return null;
+
+    return craterBoxes
+      .map((box) => {
+        const top = Number(box.top_price);
+        const bottom = Number(box.bottom_price);
+        if (!Number.isFinite(top) || !Number.isFinite(bottom) || top <= 0 || bottom <= 0 || top === bottom) return null;
+        const high = Math.max(top, bottom);
+        const low = Math.min(top, bottom);
+        const mid = (high + low) / 2;
+        const width = Math.abs(high - low);
+        return { ...box, high, low, mid, width, distance: Math.abs(mid - entry) };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  };
+
+  const buildFormFromAiSignal = (signal, fallbackForm) => {
+    const signalText = String(firstDefined(signal.signal, signal.side, signal.action, "AI Signal"));
+    const lowerSignal = signalText.toLowerCase();
+    const inferredDirection = lowerSignal.includes("short") || lowerSignal.includes("sell") ? "Short" : "Long";
+    const entryValue = firstDefined(signal.entry, signal.entry_price, signal.price, signal.close, signal.alert_price, fallbackForm.tradeEntryPrice, "");
+    const nearestWeekly = closestWeeklyLevelToEntry(entryValue);
+    const nearestCrater = closestCraterBoxToEntry(entryValue);
+
+    const playMakerSignalOn = parseYesNo(firstDefined(signal.playmaker_signal, signal.playMakerSignal, signal.pm_signal, signal.signal_active));
+    const liquidityOn = parseYesNo(firstDefined(signal.liquidity, signal.liquidity_on));
+    const lvnPrice = parsePrice(firstDefined(signal.lvn, signal.low_volume_node, signal.lowVolumeNode, signal.volume_node));
+    const ltfNodePrice = parsePrice(firstDefined(signal.ltf_vol_node, signal.ltf_volume_node, signal.ltfVolNode));
+    const entryNumber = parsePrice(entryValue);
+
+    const next = {
+      ...fallbackForm,
+      direction: inferredDirection,
+      tradeEntryPrice: String(entryValue || ""),
+      result: "Unfilled",
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      notes: `AI Signal: ${signalText}`,
+      tradeImages: []
+    };
+
+    if (nearestWeekly) {
+      next.prevWeekLevelOn = "Yes";
+      next.prevWeekLevelAway = String(fmt(nearestWeekly.distance));
+    }
+
+    if (nearestCrater) {
+      next.lowVolumeNodeOn = "Yes";
+      next.lowVolumeNodeWidth = String(fmt(nearestCrater.width));
+      next.lowVolumeNodeAway = String(fmt(nearestCrater.distance));
+    } else if (entryNumber !== null && lvnPrice !== null) {
+      next.lowVolumeNodeOn = "Yes";
+      next.lowVolumeNodeAway = String(fmt(Math.abs(lvnPrice - entryNumber)));
+    }
+
+    if (playMakerSignalOn) next.playMakerSignalOn = playMakerSignalOn;
+    if (liquidityOn) next.liquidityOn = liquidityOn;
+
+    const prevSessionSTDV = firstDefined(signal.stdv_session, signal.session_stdv, signal.prev_session_stdv, signal.prevSessionSTDV);
+    if (prevSessionSTDV !== undefined) {
+      next.prevSessionSTDVOn = "Yes";
+      next.prevSessionSTDVValue = normalizeSTDV(prevSessionSTDV);
+      next.prevSessionSTDVAway = String(firstDefined(signal.prev_session_stdv_away, signal.stdv_session_away, "0"));
+    }
+
+    const oneHSTDV = firstDefined(signal.stdv_1h, signal.oneHSTDV, signal.one_h_stdv);
+    if (oneHSTDV !== undefined) {
+      next.oneHSTDVOn = "Yes";
+      next.oneHSTDVValue = normalizeSTDV(oneHSTDV);
+      next.oneHSTDVAway = String(firstDefined(signal.stdv_1h_away, signal.one_h_stdv_away, "0"));
+    }
+
+    const fourHSTDV = firstDefined(signal.stdv_4h, signal.fourHSTDV, signal.four_h_stdv);
+    if (fourHSTDV !== undefined) {
+      next.fourHSTDVOn = "Yes";
+      next.fourHSTDVValue = normalizeSTDV(fourHSTDV);
+      next.fourHSTDVAway = String(firstDefined(signal.stdv_4h_away, signal.four_h_stdv_away, "0"));
+    }
+
+    const fib15 = firstDefined(signal.fib_15m, signal.retrace_15m, signal.retrace15m);
+    if (fib15 !== undefined) {
+      next.retrace15mOn = "Yes";
+      next.retrace15mValue = normalizeRetrace(fib15);
+      next.retrace15mAway = String(firstDefined(signal.fib_15m_away, signal.retrace_15m_away, "0"));
+    }
+
+    const fib1h = firstDefined(signal.fib_1h, signal.retrace_1h, signal.retrace1H);
+    if (fib1h !== undefined) {
+      next.retrace1HOn = "Yes";
+      next.retrace1HValue = normalizeRetrace(fib1h);
+      next.retrace1HAway = String(firstDefined(signal.fib_1h_away, signal.retrace_1h_away, "0"));
+    }
+
+    const fib4h = firstDefined(signal.fib_4h, signal.retrace_4h, signal.retrace4H);
+    if (fib4h !== undefined) {
+      next.retrace4HOn = "Yes";
+      next.retrace4HValue = normalizeRetrace(fib4h);
+      next.retrace4HAway = String(firstDefined(signal.fib_4h_away, signal.retrace_4h_away, "0"));
+    }
+
+    if (entryNumber !== null && ltfNodePrice !== null) {
+      next.ltfVolNodeOn = "Yes";
+      next.ltfVolNodeAway = String(fmt(Math.abs(ltfNodePrice - entryNumber)));
+    }
+
+    return { next, signalText, inferredDirection, entryValue };
+  };
+
   const selectAiSignal = (signal) => {
-    const signalText = String(signal.signal || "AI Signal");
-    const inferredDirection = signalText.toLowerCase().includes("short") || signalText.toLowerCase().includes("sell")
-      ? "Short"
-      : "Long";
+    const { next, signalText, inferredDirection, entryValue } = buildFormFromAiSignal(signal, form);
 
     const item = {
       id: `ai-${signal.id || signal.created_at || Date.now()}`,
       date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
       direction: inferredDirection,
-      entry: signal.price || form.tradeEntryPrice || "",
+      entry: entryValue || "",
       grade: "AI",
       score: 0,
       result: "Unfilled",
@@ -1209,17 +1335,9 @@ const exportJournalCSV = () => {
 
     setSelectedTrade(item);
     setEditingId(null);
-    setForm((f) => ({
-      ...f,
-      direction: item.direction,
-      tradeEntryPrice: String(item.entry || ""),
-      result: "Unfilled",
-      maxMove: "",
-      maxDrawdown: "",
-      profitLoss: "",
-      notes: item.notes,
-      tradeImages: []
-    }));
+    setForm(next);
+    if (next.playMakerSignalOn === "Yes") setStartingLevel("playMakerSignal");
+    else setStartingLevel("");
     setTab("checklist");
   };
 
@@ -1243,7 +1361,7 @@ const exportJournalCSV = () => {
       id: `ai-${signal.id || signal.created_at || signal.signal}`,
       date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
       direction: String(signal.signal || "").toLowerCase().includes("short") || String(signal.signal || "").toLowerCase().includes("sell") ? "Short" : "Long",
-      entry: signal.price || "",
+      entry: firstDefined(signal.entry, signal.entry_price, signal.price, signal.close, signal.alert_price, ""),
       grade: "AI",
       score: "--",
       result: "Unfilled",
@@ -1332,6 +1450,11 @@ const exportJournalCSV = () => {
             </div>
             <div className="mt-1 text-lg text-zinc-200">{text}</div>
             <div className="mt-4 h-2 rounded-full bg-zinc-900"><div className="h-full rounded-full bg-[#00d27a]" style={{width: `${report.score}%`}} /></div>
+            <div className="mt-4 rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-300">
+              <div className="font-black text-[#ffcc19]">Logged in</div>
+              <div className="mt-1 break-all">{user?.email || "No email"}</div>
+              <button onClick={signOut} className="mt-3 rounded-lg border border-[#ffcc19] px-3 py-2 font-black text-[#ffcc19] hover:bg-[#171200]">Sign Out</button>
+            </div>
           </div>
         </div>
 
@@ -1640,13 +1763,11 @@ const exportJournalCSV = () => {
                     <tr><th className="p-3">Needed</th><th>Current Value</th><th>Status</th></tr>
                   </thead>
                   <tbody>
-                    <tr className="border-t border-zinc-800"><td className="p-3"><b>Saved weekly levels</b><div className="text-xs text-zinc-500">Manual weekly pillar zones</div></td><td>{weeklyLevels.length}</td><td className={weeklyLevels.length ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{weeklyLevels.length ? "Ready" : "Needed"}</td></tr>
-                    <tr className="border-t border-zinc-800"><td className="p-3"><b>Saved crater boxes</b><div className="text-xs text-zinc-500">Manual crater box pillar zones</div></td><td>{craterBoxes.length}</td><td className={craterBoxes.length ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{craterBoxes.length ? "Ready" : "Needed"}</td></tr>
                     {aiChecklist.map((row) => (
                       <tr key={row.item} className="border-t border-zinc-800">
                         <td className="p-3"><b>{row.item}</b><div className="text-xs text-zinc-500">{row.needed}</div></td>
-                        <td>{row.value || "--"}</td>
-                        <td className={row.value ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{row.value ? "Ready" : "Needed"}</td>
+                        <td>{row.value === 0 ? 0 : (row.value || "--")}</td>
+                        <td className={row.ready ? "font-black text-[#00d27a]" : "font-black text-[#ffcc19]"}>{row.status || (row.ready ? "Ready" : "Needed")}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -1752,7 +1873,7 @@ function Breakdown({ report, recommendations, tips }) {
 }
 
 function Journal({ journal, saveTrade, editTrade, exportJournalCSV, form, set, editingId, handleImageUpload }) {
-  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Filled", "No Fill", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId || form.result !== "Unfilled" ? "Save Result" : "Archive / Remove From Active"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
+  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId || form.result !== "Unfilled" ? "Save Result" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
 }
 
 function Behavior({ behavior, journal }) {
