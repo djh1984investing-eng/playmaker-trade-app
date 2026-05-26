@@ -11,25 +11,27 @@ export default async function handler(req, res) {
   }
 
   try {
-    const signal = req.body;
+    const signal = req.body || {};
 
-    const { error } = await supabase.from("trade_journal").insert([
-      {
-        user_id: "tradingview-webhook",
-        symbol: signal.symbol || "NQ",
-        direction: signal.direction || "Unknown",
-        entry_price: Number(signal.price) || null,
-        grade: signal.grade || "Auto",
-        score: Number(signal.score) || null,
-        zone_score: Number(signal.zone_score) || null,
-        precision_score: Number(signal.precision_score) || null,
-        result: "Unfilled",
-        notes: signal.notes || "Auto signal from TradingView",
-        confluences: signal.confluences || signal,
-        recommendations: signal.recommendations || null,
-        screenshots: []
-      }
-    ]);
+    const payload = {
+      user_id: signal.user_id || "djh1984investing-eng",
+      symbol: signal.symbol || signal.ticker || "NQ",
+      timeframe: signal.timeframe || signal.interval || "",
+      signal: signal.signal || signal.setup || "TradingView Signal",
+      direction:
+        signal.direction ||
+        (String(signal.signal || "").toLowerCase().includes("bearish") ||
+        String(signal.signal || "").toLowerCase().includes("short") ||
+        String(signal.signal || "").toLowerCase().includes("sell")
+          ? "Short"
+          : "Long"),
+      price: Number(signal.price || signal.entry || signal.entry_price) || null,
+      raw: signal
+    };
+
+    const { error } = await supabase
+      .from("playmaker_signals")
+      .insert([payload]);
 
     if (error) {
       return res.status(500).json({ ok: false, error: error.message });
@@ -38,7 +40,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       message: "TradingView signal saved",
-      signal
+      payload
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
