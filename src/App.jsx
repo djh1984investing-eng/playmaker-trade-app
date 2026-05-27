@@ -687,6 +687,222 @@ useEffect(() => {
 
   const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
+
+  const getSignalPayload = (signal) => ({
+    ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}),
+    ...signal
+  });
+
+  const normalizeDirection = (value, fallbackSignal = "") => {
+    const text = String(value || fallbackSignal || "").toLowerCase();
+    if (text.includes("short") || text.includes("sell") || text.includes("bearish") || text.includes("top")) return "Short";
+    if (text.includes("long") || text.includes("buy") || text.includes("bullish") || text.includes("bottom")) return "Long";
+    return "Long";
+  };
+
+  const deviationStrength = (name) => {
+    const match = String(name || "").match(/(-?\d+(?:_\d+)?|-?\d+(?:\.\d+)?)/);
+    if (!match) return 0;
+    const value = Math.abs(Number(match[1].replace("_", ".")));
+    if (value >= 4) return 24;
+    if (value >= 3.5) return 22;
+    if (value >= 3) return 20;
+    if (value >= 2.5) return 17;
+    if (value >= 2) return 14;
+    if (value >= 1.5) return 11;
+    if (value >= 1) return 8;
+    if (value >= 0.705) return 6;
+    if (value >= 0.5) return 4;
+    return 0;
+  };
+
+  const scoreDistance = (distance, tight, medium, wide) => {
+    if (!Number.isFinite(distance)) return 0;
+    if (distance <= tight) return 1;
+    if (distance <= medium) return 0.72;
+    if (distance <= wide) return 0.42;
+    return 0;
+  };
+
+  const nearestWeeklyToPrice = (price) => {
+    const entry = parsePrice(price);
+    if (entry === null || weeklyLevels.length === 0) return null;
+    return weeklyLevels
+      .map((level) => ({
+        ...level,
+        anchorType: "Previous Week Level",
+        anchorPrice: Number(level.price),
+        distance: Math.abs(Number(level.price) - entry)
+      }))
+      .filter((level) => Number.isFinite(level.anchorPrice) && Number.isFinite(level.distance))
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  };
+
+  const nearestCraterToPrice = (price) => {
+    const entry = parsePrice(price);
+    if (entry === null || craterBoxes.length === 0) return null;
+    return craterBoxes
+      .map((box) => {
+        const top = Number(box.top_price);
+        const bottom = Number(box.bottom_price);
+        if (!Number.isFinite(top) || !Number.isFinite(bottom) || top <= 0 || bottom <= 0 || top === bottom) return null;
+        const high = Math.max(top, bottom);
+        const low = Math.min(top, bottom);
+        const mid = (high + low) / 2;
+        const width = Math.abs(high - low);
+        const inside = entry <= high && entry >= low;
+        return {
+          ...box,
+          anchorType: "Volume Crater / LVN",
+          anchorPrice: inside ? entry : mid,
+          high,
+          low,
+          mid,
+          width,
+          inside,
+          distance: inside ? 0 : Math.min(Math.abs(entry - high), Math.abs(entry - low), Math.abs(entry - mid))
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  };
+
+  const buildLimitZoneCandidates = (signal) => {
+    const payload = getSignalPayload(signal);
+    const signalName = String(payload.signal || payload.setup || signal.signal || "AI Signal");
+    const type = signalName.toUpperCase();
+    const session = String(payload.session || payload.session_name || payload.timeframe || signal.timeframe || "GLOBAL");
+    const triggerPrice = parsePrice(firstDefined(payload.trigger_price, payload.price, payload.entry, payload.entry_price, signal.price));
+    const created = signal.created_at || payload.created_at;
+    const base = {
+      sourceSignal: signal,
+      payload,
+      sourceId: signal.id || payload.id || created || signalName,
+      created_at: created,
+      session,
+      triggerPrice,
+      signalName
+    };
+
+    const make = (price, label, direction, sourceType, extraScore = 0) => {
+      const parsed = parsePrice(price);
+      if (parsed === null || parsed <= 0) return null;
+      return {
+        ...base,
+        price: parsed,
+        label,
+        direction: normalizeDirection(direction, signalName),
+        sourceType,
+        extraScore
+      };
+    };
+
+    const candidates = [];
+    const push = (candidate) => { if (candidate) candidates.push(candidate); };
+
+    if (type.includes("SESSION_DEVIATION")) {
+      const levels = [
+        ["-4", payload.neg_4], ["-3.5", payload.neg_3_5], ["-3", payload.neg_3], ["-2.5", payload.neg_2_5],
+        ["-2", payload.neg_2], ["-1.5", payload.neg_1_5], ["-1", payload.neg_1], ["-0.786", payload.neg_0786],
+        ["-0.705", payload.neg_0705], ["-0.618", payload.neg_0618], ["-0.5", payload.neg_05],
+        ["+0.5", payload.pos_05], ["+0.618", payload.pos_0618], ["+0.705", payload.pos_0705], ["+0.786", payload.pos_0786],
+        ["+1", payload.pos_1], ["+1.5", payload.pos_1_5], ["+2", payload.pos_2], ["+2.5", payload.pos_2_5],
+        ["+3", payload.pos_3], ["+3.5", payload.pos_3_5], ["+4", payload.pos_4]
+      ];
+      levels.forEach(([name, value]) => {
+        const dir = String(name).startsWith("-") ? "Long" : "Short";
+        push(make(value, `${session} deviation ${name}`, dir, "Prev Session Deviation", 28 + deviationStrength(name)));
+      });
+    }
+
+    if (type.includes("CONFLUENCE")) {
+      const price = firstDefined(payload.confluence_price, payload.htf_confluence_price, payload.price, payload.trigger_price);
+      push(make(price, `PlayMaker confluence ${payload.sources || payload.matches || ""}`.trim(), payload.direction, "PlayMaker Confluence", 42 + Math.min(18, n(payload.matches || payload.count || payload.htfConfluenceCount) * 4)));
+    }
+
+    if (type.includes("ORDER_BLOCK") || type.includes("ORDER BLOCK")) {
+      const high = parsePrice(firstDefined(payload.high, payload.ob_high, payload.top));
+      const low = parsePrice(firstDefined(payload.low, payload.ob_low, payload.bottom));
+      const ce = parsePrice(firstDefined(payload.ce, payload.ob_ce, high !== null && low !== null ? (high + low) / 2 : null));
+      push(make(ce, `Order block CE`, firstDefined(payload.direction, signalName), "Order Block", 24));
+    }
+
+    if (type.includes("REJECTION_BLOCK") || type.includes("REJECTION BLOCK")) {
+      const high = parsePrice(firstDefined(payload.high, payload.rb_high, payload.top));
+      const low = parsePrice(firstDefined(payload.low, payload.rb_low, payload.bottom));
+      const ce = parsePrice(firstDefined(payload.ce, payload.rb_ce, high !== null && low !== null ? (high + low) / 2 : null));
+      push(make(ce, `Rejection block CE`, firstDefined(payload.direction, signalName), "Rejection Block", 22));
+    }
+
+    if (type.includes("RETRACE")) {
+      const fibs = [
+        ["0.50", payload.fib_050],
+        ["0.618", payload.fib_0618],
+        ["0.705", payload.fib_0705],
+        ["0.786", payload.fib_0786]
+      ];
+      fibs.forEach(([name, value]) => {
+        push(make(value, `${signalName} ${name}`, payload.direction, "HTF / LTF Retrace", name === "0.786" ? 14 : name === "0.705" ? 12 : name === "0.618" ? 10 : 7));
+      });
+    }
+
+    return candidates;
+  };
+
+  const rankedAiLimitZones = useMemo(() => {
+    const rawCandidates = unfilledAiSignals.flatMap(buildLimitZoneCandidates);
+
+    const scored = rawCandidates.map((zone) => {
+      const weekly = nearestWeeklyToPrice(zone.price);
+      const crater = nearestCraterToPrice(zone.price);
+      const triggerDistance = zone.triggerPrice !== null ? Math.abs(zone.triggerPrice - zone.price) : null;
+
+      const weeklyScore = weekly ? 26 * scoreDistance(weekly.distance, 3, 7, 15) : 0;
+      const craterScore = crater ? (crater.inside ? 30 : 28 * scoreDistance(crater.distance, 3, 7, 15)) : 0;
+      const craterWidthBonus = crater ? Math.min(10, Math.max(0, n(crater.width) / 12)) : 0;
+      const playmakerBonus = zone.sourceType === "PlayMaker Confluence" ? 18 : 0;
+      const structureBonus = ["Order Block", "Rejection Block"].includes(zone.sourceType) ? 8 : 0;
+      const retraceOnlyPenalty = zone.sourceType === "HTF / LTF Retrace" && !weeklyScore && !craterScore ? -25 : 0;
+
+      const score = Math.round(clamp(zone.extraScore + weeklyScore + craterScore + craterWidthBonus + playmakerBonus + structureBonus + retraceOnlyPenalty, 0, 100));
+      const [zoneGrade] = grade(score);
+      const status = triggerDistance !== null && triggerDistance <= 12 ? "READY LIMIT ZONE" : "WATCHLIST LIMIT ZONE";
+      const reasons = [
+        zone.sourceType,
+        weekly && weekly.distance <= 15 ? `Weekly ${weekly.name || "level"} ${fmt(weekly.distance)} pts` : null,
+        crater && crater.distance <= 15 ? `${crater.inside ? "Inside" : "Near"} crater ${crater.name || "box"} ${fmt(crater.distance)} pts` : null,
+        triggerDistance !== null ? `Current price ${fmt(triggerDistance)} pts away` : null
+      ].filter(Boolean);
+
+      return {
+        ...zone,
+        score,
+        grade: zoneGrade,
+        status,
+        triggerDistance,
+        weekly,
+        crater,
+        reasons
+      };
+    })
+      .filter((zone) => zone.score >= 74)
+      .sort((a, b) => b.score - a.score || (a.triggerDistance ?? 9999) - (b.triggerDistance ?? 9999));
+
+    const perSessionCount = {};
+    const selected = [];
+    for (const zone of scored) {
+      const key = zone.session || "GLOBAL";
+      perSessionCount[key] = perSessionCount[key] || 0;
+      const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= 2 && item.direction === zone.direction && item.session === zone.session);
+      if (!duplicate && perSessionCount[key] < 4) {
+        selected.push(zone);
+        perSessionCount[key] += 1;
+      }
+    }
+
+    return selected;
+  }, [unfilledAiSignals, weeklyLevels, craterBoxes]);
+
   const report = useMemo(() => {
     const rows = [];
     const add = (key, name, base, active, pointsAway, mult = 1, note = "") => {
@@ -1216,17 +1432,18 @@ const exportJournalCSV = () => {
   };
 
   const buildFormFromAiSignal = (signal, fallbackForm) => {
-    const signalText = String(firstDefined(signal.signal, signal.side, signal.action, "AI Signal"));
+    const payload = getSignalPayload(signal);
+    const signalText = String(firstDefined(payload.signal, payload.side, payload.action, signal.signal, "AI Signal"));
     const lowerSignal = signalText.toLowerCase();
-    const inferredDirection = lowerSignal.includes("short") || lowerSignal.includes("sell") ? "Short" : "Long";
-    const entryValue = firstDefined(signal.entry, signal.entry_price, signal.price, signal.close, signal.alert_price, fallbackForm.tradeEntryPrice, "");
+    const inferredDirection = normalizeDirection(firstDefined(payload.direction, payload.side, signal.direction), signalText);
+    const entryValue = firstDefined(payload.entry, payload.entry_price, payload.price, payload.trigger_price, payload.close, payload.alert_price, signal.entry, fallbackForm.tradeEntryPrice, "");
     const nearestWeekly = closestWeeklyLevelToEntry(entryValue);
     const nearestCrater = closestCraterBoxToEntry(entryValue);
 
-    const playMakerSignalOn = parseYesNo(firstDefined(signal.playmaker_signal, signal.playMakerSignal, signal.pm_signal, signal.signal_active));
-    const liquidityOn = parseYesNo(firstDefined(signal.liquidity, signal.liquidity_on));
-    const lvnPrice = parsePrice(firstDefined(signal.lvn, signal.low_volume_node, signal.lowVolumeNode, signal.volume_node));
-    const ltfNodePrice = parsePrice(firstDefined(signal.ltf_vol_node, signal.ltf_volume_node, signal.ltfVolNode));
+    const playMakerSignalOn = parseYesNo(firstDefined(payload.playmaker_signal, payload.playMakerSignal, payload.pm_signal, payload.signal_active));
+    const liquidityOn = parseYesNo(firstDefined(payload.liquidity, payload.liquidity_on));
+    const lvnPrice = parsePrice(firstDefined(payload.lvn, payload.low_volume_node, payload.lowVolumeNode, payload.volume_node));
+    const ltfNodePrice = parsePrice(firstDefined(payload.ltf_vol_node, payload.ltf_volume_node, payload.ltfVolNode));
     const entryNumber = parsePrice(entryValue);
 
     const next = {
@@ -1258,46 +1475,46 @@ const exportJournalCSV = () => {
     if (playMakerSignalOn) next.playMakerSignalOn = playMakerSignalOn;
     if (liquidityOn) next.liquidityOn = liquidityOn;
 
-    const prevSessionSTDV = firstDefined(signal.stdv_session, signal.session_stdv, signal.prev_session_stdv, signal.prevSessionSTDV);
+    const prevSessionSTDV = firstDefined(payload.stdv_session, payload.session_stdv, payload.prev_session_stdv, payload.prevSessionSTDV);
     if (prevSessionSTDV !== undefined) {
       next.prevSessionSTDVOn = "Yes";
       next.prevSessionSTDVValue = normalizeSTDV(prevSessionSTDV);
-      next.prevSessionSTDVAway = String(firstDefined(signal.prev_session_stdv_away, signal.stdv_session_away, "0"));
+      next.prevSessionSTDVAway = String(firstDefined(payload.prev_session_stdv_away, payload.stdv_session_away, "0"));
     }
 
-    const oneHSTDV = firstDefined(signal.stdv_1h, signal.oneHSTDV, signal.one_h_stdv);
+    const oneHSTDV = firstDefined(payload.stdv_1h, payload.oneHSTDV, payload.one_h_stdv, payload.h1_fib_0705, payload.h1_fib_0618);
     if (oneHSTDV !== undefined) {
       next.oneHSTDVOn = "Yes";
       next.oneHSTDVValue = normalizeSTDV(oneHSTDV);
-      next.oneHSTDVAway = String(firstDefined(signal.stdv_1h_away, signal.one_h_stdv_away, "0"));
+      next.oneHSTDVAway = String(firstDefined(payload.stdv_1h_away, payload.one_h_stdv_away, "0"));
     }
 
-    const fourHSTDV = firstDefined(signal.stdv_4h, signal.fourHSTDV, signal.four_h_stdv);
+    const fourHSTDV = firstDefined(payload.stdv_4h, payload.fourHSTDV, payload.four_h_stdv, payload.h4_fib_0705, payload.h4_fib_0618);
     if (fourHSTDV !== undefined) {
       next.fourHSTDVOn = "Yes";
       next.fourHSTDVValue = normalizeSTDV(fourHSTDV);
-      next.fourHSTDVAway = String(firstDefined(signal.stdv_4h_away, signal.four_h_stdv_away, "0"));
+      next.fourHSTDVAway = String(firstDefined(payload.stdv_4h_away, payload.four_h_stdv_away, "0"));
     }
 
-    const fib15 = firstDefined(signal.fib_15m, signal.retrace_15m, signal.retrace15m);
+    const fib15 = firstDefined(payload.fib_15m, payload.retrace_15m, payload.retrace15m, payload.fib_0705, payload.fib_0618);
     if (fib15 !== undefined) {
       next.retrace15mOn = "Yes";
       next.retrace15mValue = normalizeRetrace(fib15);
-      next.retrace15mAway = String(firstDefined(signal.fib_15m_away, signal.retrace_15m_away, "0"));
+      next.retrace15mAway = String(firstDefined(payload.fib_15m_away, payload.retrace_15m_away, "0"));
     }
 
-    const fib1h = firstDefined(signal.fib_1h, signal.retrace_1h, signal.retrace1H);
+    const fib1h = firstDefined(payload.fib_1h, payload.retrace_1h, payload.retrace1H, payload.h1_fib_0705, payload.h1_fib_0618);
     if (fib1h !== undefined) {
       next.retrace1HOn = "Yes";
       next.retrace1HValue = normalizeRetrace(fib1h);
-      next.retrace1HAway = String(firstDefined(signal.fib_1h_away, signal.retrace_1h_away, "0"));
+      next.retrace1HAway = String(firstDefined(payload.fib_1h_away, payload.retrace_1h_away, "0"));
     }
 
-    const fib4h = firstDefined(signal.fib_4h, signal.retrace_4h, signal.retrace4H);
+    const fib4h = firstDefined(payload.fib_4h, payload.retrace_4h, payload.retrace4H, payload.h4_fib_0705, payload.h4_fib_0618);
     if (fib4h !== undefined) {
       next.retrace4HOn = "Yes";
       next.retrace4HValue = normalizeRetrace(fib4h);
-      next.retrace4HAway = String(firstDefined(signal.fib_4h_away, signal.retrace_4h_away, "0"));
+      next.retrace4HAway = String(firstDefined(payload.fib_4h_away, payload.retrace_4h_away, "0"));
     }
 
     if (entryNumber !== null && ltfNodePrice !== null) {
@@ -1357,26 +1574,38 @@ const exportJournalCSV = () => {
       ...order,
       sourceType: order.sourceType || "Manual Order"
     })),
-    ...unfilledAiSignals.map((signal) => ({
-      id: `ai-${signal.id || signal.created_at || signal.signal}`,
-      date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
-      direction: String(signal.signal || "").toLowerCase().includes("short") || String(signal.signal || "").toLowerCase().includes("sell") ? "Short" : "Long",
-      entry: firstDefined(signal.entry, signal.entry_price, signal.price, signal.close, signal.alert_price, ""),
-      grade: "AI",
-      score: "--",
+    ...rankedAiLimitZones.map((zone) => ({
+      id: `zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`,
+      date: zone.created_at ? new Date(zone.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+      direction: zone.direction,
+      entry: zone.price,
+      grade: zone.grade,
+      score: zone.score,
       result: "Unfilled",
-      orderStatus: "Unfilled",
+      orderStatus: zone.status,
       pendingOrder: true,
       maxMove: "",
       maxDrawdown: "",
       profitLoss: "",
-      notes: `AI Signal: ${signal.signal || "AI Signal"}`,
+      notes: `${zone.status}: ${zone.label} — ${zone.reasons.join(" • ")}`,
       tradeImages: [],
-      top: signal.signal || "AI Signal",
+      top: zone.reasons.join(" • "),
       sourceType: "AI Signal",
-      signal_id: signal.id || "",
-      signalName: signal.signal || "AI Signal",
-      rawSignal: signal
+      signal_id: zone.sourceId || "",
+      signalName: zone.label,
+      rawSignal: {
+        ...zone.payload,
+        id: zone.sourceId,
+        signal: zone.label,
+        direction: zone.direction,
+        price: zone.price,
+        entry: zone.price,
+        trigger_price: zone.triggerPrice,
+        ai_grade: zone.grade,
+        ai_score: zone.score,
+        ai_status: zone.status,
+        confluence_reasons: zone.reasons
+      }
     }))
   ];
 
