@@ -57,6 +57,37 @@ const fmtPrice = (value) => {
   return Number.isFinite(parsed) ? parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--";
 };
 
+const formatEastern = (value) => {
+  if (!value) return "--";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short"
+  });
+};
+
+const arrayFromMaybe = (value) => {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null || value === "") return [];
+  if (typeof value === "string") {
+    const txt = value.trim();
+    if (!txt) return [];
+    try {
+      const parsed = JSON.parse(txt);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (_err) {}
+    return txt.split(",").map((part) => part.trim()).filter(Boolean);
+  }
+  return [value];
+};
+
 const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
 
 const parseYesNo = (value) => {
@@ -469,7 +500,8 @@ useEffect(() => {
           top: Array.isArray(row.confluences) ? row.confluences.map((r) => r.name).join(", ") : "",
           signal_id: row.signal_id || row.ai_signal_id || "",
           sourceType: row.notes?.includes("AI Signal:") ? "AI Signal" : "Manual Order",
-          formSnapshot: null
+          evidence: Array.isArray(row.confluences) ? row.confluences : [],
+          formSnapshot: row.confluences ? { evidence: row.confluences } : null
         })));
       }
     };
@@ -494,7 +526,8 @@ useEffect(() => {
   };
 
   const saveWeeklyLevel = async () => {
-    if (!user) {
+  
+  if (!user) {
       alert("Please log in before saving AI levels.");
       return;
     }
@@ -694,6 +727,9 @@ useEffect(() => {
   });
 
   const normalizeDirection = (value, fallbackSignal = "") => {
+    const direct = String(value || "").trim().toLowerCase();
+    if (["both", "neutral", "level", "levels"].includes(direct)) return "Both";
+
     const text = String(value || fallbackSignal || "").toLowerCase();
     if (text.includes("short") || text.includes("sell") || text.includes("bearish") || text.includes("top")) return "Short";
     if (text.includes("long") || text.includes("buy") || text.includes("bullish") || text.includes("bottom")) return "Long";
@@ -795,12 +831,76 @@ useEffect(() => {
       .sort((a, b) => a.distance - b.distance)[0] || null;
   };
 
-  const levelMergeTolerance = 7;
+  // Cluster tolerance: levels within 20 points are treated as one tradable zone.
+  // Precision scoring then decides whether that zone is tight enough for 7/10/15 pt stops.
+  const levelMergeTolerance = 20;
 
   const getLevelKey = (price) => {
     const parsed = parsePrice(price);
     if (parsed === null) return "na";
     return String(Math.round(parsed / 5) * 5);
+  };
+
+
+  const uniqueSortedPrices = (items) => {
+    const seen = new Set();
+    return items
+      .map((item) => parsePrice(item.price))
+      .filter((price) => price !== null && price > 0)
+      .sort((a, b) => a - b)
+      .filter((price) => {
+        const key = String(Math.round(price * 4) / 4);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  };
+
+  const clusterPrecisionFromWidth = (width) => {
+    const w = Math.abs(n(width));
+    if (w <= 5) return 100;
+    if (w <= 10) return 90;
+    if (w <= 15) return 80;
+    if (w <= 20) return 70;
+    if (w <= 30) return 55;
+    return 40;
+  };
+
+  const clusterStatusFromWidth = (width) => {
+    const w = Math.abs(n(width));
+    if (w <= 5) return "PINPOINT LIMIT CLUSTER";
+    if (w <= 10) return "TIGHT LIMIT CLUSTER";
+    if (w <= 20) return "TRADABLE LIMIT CLUSTER";
+    if (w <= 30) return "WIDE WATCHLIST CLUSTER";
+    return "TOO WIDE / SPLIT ZONE";
+  };
+
+  const buildStopPlansForCluster = (direction, low, high, center) => {
+    const width = Math.max(0, high - low);
+    const halfWidth = width / 2;
+    const buffer = 2;
+    const dir = String(direction || "").toLowerCase();
+    const isShort = dir.includes("short");
+    return [7, 10, 15].map((stop) => {
+      const needed = halfWidth + buffer;
+      const valid = stop >= needed;
+      // Wider stops can use the cluster center. Tight stops get an adjusted limit
+      // closer to the outside edge so the stop still clears the full cluster.
+      const edgeAdjustedLimit = isShort ? high - Math.max(0, stop - buffer) : low + Math.max(0, stop - buffer);
+      const limit = valid ? center : edgeAdjustedLimit;
+      const stopArea = isShort ? limit + stop : limit - stop;
+      return {
+        stop,
+        limit,
+        stopArea,
+        valid,
+        neededStop: needed,
+        confidence: valid ? (stop <= 7 ? "Pinpoint" : stop <= 10 ? "Tight" : "Best Fit") : "Too Tight",
+        note: valid
+          ? `Center limit from ${fmt(width)} pt cluster.`
+          : `Center is too tight for this stop. Adjusted limit toward edge; cluster needs about ${fmt(needed)} pts for center entry.`
+      };
+    });
   };
 
   const deviationAbsFromLabel = (label) => {
@@ -828,6 +928,7 @@ useEffect(() => {
 
   const timeframeFromPayload = (payload, fallback = "") => {
     const raw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, fallback) || "").toUpperCase();
+    if (raw === "D" || raw.includes("DAILY") || raw.includes("1D")) return "D";
     if (raw.includes("240") || raw.includes("4H")) return "4H";
     if (raw.includes("60") || raw.includes("1H")) return "1H";
     if (raw.includes("15")) return "15m";
@@ -876,10 +977,13 @@ useEffect(() => {
         ["-6", payload.neg_6], ["-5.5", payload.neg_5_5], ["-5", payload.neg_5], ["-4.5", payload.neg_4_5], ["-4", payload.neg_4], ["-3.5", payload.neg_3_5], ["-3", payload.neg_3], ["-2.5", payload.neg_2_5], ["-2", payload.neg_2], ["-1.5", payload.neg_1_5], ["-1", payload.neg_1], ["-0.786", payload.neg_0786], ["-0.705", payload.neg_0705], ["-0.618", payload.neg_0618], ["-0.5", payload.neg_05],
         ["+0.5", payload.pos_05], ["+0.618", payload.pos_0618], ["+0.705", payload.pos_0705], ["+0.786", payload.pos_0786], ["+1", payload.pos_1], ["+1.5", payload.pos_1_5], ["+2", payload.pos_2], ["+2.5", payload.pos_2_5], ["+3", payload.pos_3], ["+3.5", payload.pos_3_5], ["+4", payload.pos_4], ["+4.5", payload.pos_4_5], ["+5", payload.pos_5], ["+5.5", payload.pos_5_5], ["+6", payload.pos_6]
       ];
+      const tf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
+      const tfWeight = tf === "D" ? 1.7 : tf === "4H" ? 1.8 : tf === "1H" ? 1.45 : tf === "15m" ? 1.15 : 1;
       levels.forEach(([name, value]) => {
         const dir = String(name).startsWith("-") ? "Long" : "Short";
         const abs = deviationAbsFromLabel(name);
-        push(make(value, `${session} deviation ${name}`, dir, abs >= 3 ? "Major Session Deviation" : "Session Deviation", deviationEvidenceScore(name), abs >= 3 ? "anchor" : "support"));
+        const family = tf === "D" ? "Daily STDV" : tf === "4H" ? "4H STDV" : tf === "1H" ? "1H STDV" : tf === "15m" ? "15m STDV" : "5m Session STDV";
+        push(make(value, `${family} ${session} ${name}`, dir, abs >= 3 ? "Major Session Deviation" : "Session Deviation", deviationEvidenceScore(name) * tfWeight, abs >= 3 || tf === "D" || tf === "4H" || tf === "1H" ? "anchor" : "support"));
       });
     }
 
@@ -905,12 +1009,94 @@ useEffect(() => {
       if (score > 0) push(make(ce, `${timeframeFromPayload(payload, signalName) || "HTF"} rejection block CE`, firstDefined(payload.direction, signalName), "Rejection Block", score, score >= 13 ? "major" : "minor"));
     }
 
-    if (type.includes("RETRACE")) {
+    if (type.includes("EXTENSION") || String(payload.type || "").toUpperCase().includes("EXTENSION")) {
+      const tf = timeframeFromPayload(payload, signalName) || "HTF";
+      const tfWeight = tf === "D" ? 1.65 : tf === "4H" ? 1.9 : tf === "1H" ? 1.55 : 1;
+      const family = tf === "D" ? "Daily STDV" : tf === "4H" ? "4H STDV" : tf === "1H" ? "1H STDV" : `${tf} STDV`;
+      const levelPairs = [
+        ["-6", firstDefined(payload.neg_6, payload.ext_neg_6)],
+        ["-5.5", firstDefined(payload.neg_5_5, payload.ext_neg_5_5)],
+        ["-5", firstDefined(payload.neg_5, payload.ext_neg_5)],
+        ["-4.5", firstDefined(payload.neg_4_5, payload.ext_neg_4_5)],
+        ["-4", firstDefined(payload.neg_4, payload.ext_neg_4)],
+        ["-3.5", firstDefined(payload.neg_3_5, payload.ext_neg_3_5)],
+        ["-3", firstDefined(payload.neg_3, payload.ext_neg_3)],
+        ["-2.5", firstDefined(payload.neg_2_5, payload.ext_neg_2_5)],
+        ["-2", firstDefined(payload.neg_2, payload.ext_neg_2)],
+        ["-1.5", firstDefined(payload.neg_1_5, payload.ext_neg_1_5)],
+        ["-1", firstDefined(payload.neg_1, payload.ext_neg_1, payload.swing_low)],
+        ["CE", payload.ce],
+        ["+1", firstDefined(payload.pos_1, payload.ext_pos_1, payload.swing_high)],
+        ["+1.5", firstDefined(payload.pos_1_5, payload.ext_pos_1_5)],
+        ["+2", firstDefined(payload.pos_2, payload.ext_pos_2)],
+        ["+2.5", firstDefined(payload.pos_2_5, payload.ext_pos_2_5)],
+        ["+3", firstDefined(payload.pos_3, payload.ext_pos_3)],
+        ["+3.5", firstDefined(payload.pos_3_5, payload.ext_pos_3_5)],
+        ["+4", firstDefined(payload.pos_4, payload.ext_pos_4)],
+        ["+4.5", firstDefined(payload.pos_4_5, payload.ext_pos_4_5)],
+        ["+5", firstDefined(payload.pos_5, payload.ext_pos_5)],
+        ["+5.5", firstDefined(payload.pos_5_5, payload.ext_pos_5_5)],
+        ["+6", firstDefined(payload.pos_6, payload.ext_pos_6)]
+      ];
+      levelPairs.forEach(([name, value]) => {
+        const isCE = name === "CE";
+        const levelScore = isCE ? 12 * tfWeight : deviationEvidenceScore(name) * tfWeight;
+        const evidenceClass = tf === "D" || tf === "4H" || tf === "1H" || deviationAbsFromLabel(name) >= 3 ? "anchor" : "support";
+        // Neutral sweep extensions are level sources, not long/short bias.
+        // Daily levels are good but treated as broader zones; cluster precision still decides exact entry.
+        push(make(value, `${family} ${name}`, "Both", family, levelScore, evidenceClass));
+      });
+    }
+
+    if (type.includes("VOLUME_PROFILE_LEVELS") || type.includes("VOLUME PROFILE")) {
+      const tf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "");
+      const tfPrefix = tf ? `${tf} ` : "";
+      const is15 = tf === "15m";
+      const is5 = tf === "5m";
+
+      // Volume profile is used for precision/confirmation, not as a standalone trade anchor.
+      // POC can react directly. LVN/crater can sweep below/above then reverse depending on the other levels stacked there.
+      const poc = firstDefined(payload.poc, payload.point_of_control, payload.vp_poc, payload.volume_poc);
+      const vah = firstDefined(payload.vah, payload.value_area_high, payload.va_high);
+      const val = firstDefined(payload.val, payload.value_area_low, payload.va_low);
+      const lvnValues = [
+        ...arrayFromMaybe(payload.lvn_levels),
+        ...arrayFromMaybe(payload.lvns),
+        ...arrayFromMaybe(payload.low_volume_nodes),
+        ...arrayFromMaybe(payload.low_volume_node),
+        ...arrayFromMaybe(payload.crater_levels),
+        ...arrayFromMaybe(payload.craters)
+      ];
+      const hvnValues = [
+        ...arrayFromMaybe(payload.hvn_levels),
+        ...arrayFromMaybe(payload.hvns),
+        ...arrayFromMaybe(payload.high_volume_nodes),
+        ...arrayFromMaybe(payload.high_volume_node)
+      ];
+
+      const pocScore = is15 ? 24 : is5 ? 18 : 14;
+      const lvnScore = is15 ? 26 : is5 ? 20 : 15;
+      const vaScore = is15 ? 16 : is5 ? 12 : 9;
+      const hvnScore = is15 ? 11 : is5 ? 8 : 6;
+
+      push(make(poc, `${tfPrefix}Volume POC precision`, "Both", "Volume Profile POC", pocScore, "precision"));
+      push(make(vah, `${tfPrefix}Volume VAH precision`, "Both", "Volume Profile VAH", vaScore, "precision"));
+      push(make(val, `${tfPrefix}Volume VAL precision`, "Both", "Volume Profile VAL", vaScore, "precision"));
+      lvnValues.forEach((value, idx) => push(make(value, `${tfPrefix}LVN / crater precision ${idx + 1}`, "Both", "Volume Profile LVN", lvnScore, "precision")));
+      hvnValues.forEach((value, idx) => push(make(value, `${tfPrefix}HVN confirmation ${idx + 1}`, "Both", "Volume Profile HVN", hvnScore, "precision")));
+    }
+
+    if (type.includes("RETRACE") || type.includes("RETRACEMENT")) {
       const tf = timeframeFromPayload(payload, signalName);
-      const tfScore = tf === "4H" ? 24 : tf === "1H" ? 20 : tf === "15m" ? 12 : 8;
-      [["0.50", payload.fib_050], ["0.618", payload.fib_0618], ["0.705", payload.fib_0705], ["0.786", payload.fib_0786]].forEach(([name, value]) => {
-        const fibBonus = name === "0.786" ? 5 : name === "0.705" ? 4 : name === "0.618" ? 3 : 1;
-        push(make(value, `${signalName} ${name}`, payload.direction, "OTE Retracement", tfScore + fibBonus, tf === "4H" || tf === "1H" ? "major" : "support"));
+      const tfScore = tf === "D" ? 30 : tf === "4H" ? 24 : tf === "1H" ? 20 : tf === "15m" ? 12 : 8;
+      [
+        ["CE / 0.50", firstDefined(payload.ce, payload.fib_050, payload.ote_050)],
+        ["0.618", firstDefined(payload.ote_0618, payload.fib_0618)],
+        ["0.705", firstDefined(payload.ote_0705, payload.fib_0705)],
+        ["0.786", firstDefined(payload.ote_0786, payload.fib_0786)]
+      ].forEach(([name, value]) => {
+        const fibBonus = name.includes("0.786") ? 5 : name.includes("0.705") ? 4 : name.includes("0.618") ? 3 : 1;
+        push(make(value, `${tf || "HTF"} OTE Retracement ${name}`, payload.direction, "OTE Retracement", tfScore + fibBonus, tf === "D" || tf === "4H" || tf === "1H" ? "major" : "support"));
       });
     }
 
@@ -943,7 +1129,12 @@ useEffect(() => {
       zone.evidence.push({ ...ev, price });
       if (ev.session) zone.sessions.add(ev.session);
       if (ev.sourceId) zone.sourceIds.add(String(ev.sourceId));
-      zone.price = zone.evidence.reduce((sum, item) => sum + item.price, 0) / zone.evidence.length;
+      const clusteredPrices = uniqueSortedPrices(zone.evidence);
+      zone.clusterLow = clusteredPrices.length ? clusteredPrices[0] : price;
+      zone.clusterHigh = clusteredPrices.length ? clusteredPrices[clusteredPrices.length - 1] : price;
+      zone.clusterWidth = Math.max(0, zone.clusterHigh - zone.clusterLow);
+      zone.price = (zone.clusterHigh + zone.clusterLow) / 2;
+      zone.clusterPrices = clusteredPrices;
       if (zone.direction === "Both" && direction !== "Both") zone.direction = direction;
     });
 
@@ -953,38 +1144,77 @@ useEffect(() => {
       const sourceTypes = new Set(zone.evidence.map((item) => item.sourceType));
       const majorDeviation = zone.evidence.find((item) => item.sourceType === "Major Session Deviation");
       const minorDeviation = zone.evidence.find((item) => item.sourceType === "Session Deviation");
+      const htfStdv = zone.evidence.find((item) => item.sourceType === "1H STDV" || item.sourceType === "4H STDV" || item.sourceType === "Daily STDV");
+      const hasDailyStdv = zone.evidence.some((item) => item.sourceType === "Daily STDV");
+      const has4HStdv = zone.evidence.some((item) => item.sourceType === "4H STDV");
+      const has1HStdv = zone.evidence.some((item) => item.sourceType === "1H STDV");
+      const hasVpPrecision = zone.evidence.some((item) => String(item.sourceType).startsWith("Volume Profile"));
+      const has5mVpPrecision = zone.evidence.some((item) => String(item.sourceType).startsWith("Volume Profile") && String(item.label).includes("5m"));
+      const has15mVpPrecision = zone.evidence.some((item) => String(item.sourceType).startsWith("Volume Profile") && String(item.label).includes("15m"));
+      const hasPocPrecision = zone.evidence.some((item) => String(item.sourceType).includes("POC"));
+      const hasLvnPrecision = zone.evidence.some((item) => String(item.sourceType).includes("LVN"));
+      const vpPrecisionBonus =
+        has5mVpPrecision && has15mVpPrecision ? 14 :
+        has15mVpPrecision ? 9 :
+        has5mVpPrecision ? 6 :
+        hasVpPrecision ? 3 :
+        0;
       const hasPlaymaker = sourceTypes.has("PlayMaker Confluence");
       const hasOTE = sourceTypes.has("OTE Retracement");
       const hasWeekly = Boolean(weekly) || sourceTypes.has("Weekly Level");
-      const hasCrater = Boolean(crater) || sourceTypes.has("Volume Crater / LVN");
+      const hasCrater = Boolean(crater) || sourceTypes.has("Volume Crater / LVN") || sourceTypes.has("Volume Profile LVN");
       const hasHTFStructure = zone.evidence.some((item) => ["Order Block", "Rejection Block"].includes(item.sourceType) && item.evidenceScore >= 13);
       const evidenceScore = zone.evidence.reduce((sum, item) => sum + n(item.evidenceScore), 0);
       const pillarScore = (hasWeekly ? 22 * scoreDistance(weekly?.distance ?? 0, 3, 7, 15) : 0) + (hasCrater ? craterQualityScore(crater) : 0);
-      const stackCount = [Boolean(majorDeviation), hasPlaymaker, hasOTE, hasWeekly, hasCrater, hasHTFStructure, Boolean(minorDeviation)].filter(Boolean).length;
-      const rawZoneScore = evidenceScore + pillarScore + Math.min(16, sourceTypes.size * 3) + stackCount * 6 - (!majorDeviation && !hasWeekly && !hasCrater && !hasPlaymaker ? 20 : 0);
+      const sourceCount = zone.evidence.length;
+      const stackCount = [Boolean(majorDeviation), Boolean(htfStdv), has1HStdv, has4HStdv, hasDailyStdv, hasPlaymaker, hasOTE, hasWeekly, hasCrater, hasHTFStructure, Boolean(minorDeviation), hasVpPrecision].filter(Boolean).length;
+      const athModeBonus = (Boolean(majorDeviation) || has1HStdv || has4HStdv || hasDailyStdv) && (has1HStdv || has4HStdv || hasDailyStdv || sourceCount >= 3) ? 14 : 0;
+      const noAnchorPenalty = (!majorDeviation && !htfStdv && !hasWeekly && !hasCrater && !hasPlaymaker) ? 20 : 0;
+      const rawZoneScore = evidenceScore + pillarScore + Math.min(24, sourceCount * 3) + Math.min(18, sourceTypes.size * 3) + stackCount * 6 + athModeBonus + vpPrecisionBonus - noAnchorPenalty;
+      const precisionOnly = zone.evidence.length > 0 && zone.evidence.every((item) => String(item.sourceType).startsWith("Volume Profile"));
       const score = Math.round(clamp(rawZoneScore, 0, 100));
       const [zoneGrade] = grade(score);
       const triggerDistances = zone.evidence.map((item) => item.triggerPrice !== null ? Math.abs(item.triggerPrice - zone.price) : null).filter((value) => value !== null);
       const nearestTriggerDistance = triggerDistances.length ? Math.min(...triggerDistances) : null;
-      const precisionScore = nearestTriggerDistance === null ? 0 : Math.round(clamp(100 - nearestTriggerDistance * 4, 0, 100));
-      const status = precisionScore >= 70 ? "READY LIMIT LEVEL" : precisionScore >= 35 ? "APPROACHING LIMIT LEVEL" : "WATCHLIST LIMIT LEVEL";
+      const clusterPrices = uniqueSortedPrices(zone.evidence);
+      const clusterLow = clusterPrices.length ? clusterPrices[0] : zone.price;
+      const clusterHigh = clusterPrices.length ? clusterPrices[clusterPrices.length - 1] : zone.price;
+      const clusterWidth = Math.max(0, clusterHigh - clusterLow);
+      const clusterCenter = (clusterHigh + clusterLow) / 2;
+      const tight5Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 2.5).length;
+      const tight10Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 5).length;
+      const tight20Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 10).length;
+      const precisionScore = clamp(clusterPrecisionFromWidth(clusterWidth) + (has5mVpPrecision && has15mVpPrecision ? 8 : hasVpPrecision ? 4 : 0), 0, 100);
+      const status = clusterStatusFromWidth(clusterWidth);
+      const stopPlans = buildStopPlansForCluster(zone.direction, clusterLow, clusterHigh, clusterCenter);
       const reasons = [
         majorDeviation ? majorDeviation.label : null,
+        hasDailyStdv ? "Daily STDV zone aligned" : null,
+        has1HStdv ? "1H STDV aligned" : null,
+        has4HStdv ? "4H STDV aligned" : null,
         hasPlaymaker ? "PlayMaker confluence" : null,
         hasOTE ? "OTE retracement" : null,
+        hasVpPrecision ? `${has5mVpPrecision && has15mVpPrecision ? "5m + 15m" : has15mVpPrecision ? "15m" : has5mVpPrecision ? "5m" : "HTF"} volume-profile precision${hasPocPrecision ? " / POC" : ""}${hasLvnPrecision ? " / LVN-crater" : ""}` : null,
         hasWeekly && weekly ? `Weekly ${weekly.name || "level"} ${fmt(weekly.distance)} pts` : (sourceTypes.has("Weekly Level") ? "Weekly level" : null),
         hasCrater && crater ? `${crater.inside ? "Inside" : "Near"} crater ${crater.name || "box"} ${fmt(crater.distance)} pts / ${fmt(crater.width)} wide` : (sourceTypes.has("Volume Crater / LVN") ? "Crater/LVN" : null),
         hasHTFStructure ? "1H/4H OB/RB structure" : null,
         minorDeviation && !majorDeviation ? "Prior/minor deviation support" : null,
-        nearestTriggerDistance !== null ? `Current price ${fmt(nearestTriggerDistance)} pts away` : "Limit level can be far from current price"
+        hasDailyStdv ? "Daily level is treated as a reaction zone; precision still comes from nearby 1H/4H/5m/15m sources." : null,
+        `Cluster ${fmt(clusterLow)}–${fmt(clusterHigh)} / width ${fmt(clusterWidth)} pts`,
+        `${tight5Count} within 5 • ${tight10Count} within 10 • ${tight20Count} within 20`,
+        nearestTriggerDistance !== null ? `Current price ${fmt(nearestTriggerDistance)} pts away (status only)` : "Limit can be far from current price"
       ].filter(Boolean);
-      return { ...zone, id: `level-${Math.round(zone.price)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} level ${fmtPrice(zone.price)}`, sourceType: "Persistent Level Stack", score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked level ${fmtPrice(zone.price)}`, payload: { price: zone.price, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: zone.evidence.map((item) => ({ label: item.label, sourceType: item.sourceType, score: item.evidenceScore })) } };
-    }).filter((zone) => zone.score >= 55).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
+      const sortedEvidence = [...zone.evidence].sort((a, b) => n(b.evidenceScore) - n(a.evidenceScore));
+      const createdTimes = sortedEvidence.map((item) => item.created_at).filter(Boolean).map((value) => new Date(value).getTime()).filter(Number.isFinite);
+      const createdAt = createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : zone.created_at;
+      const updatedAt = createdTimes.length ? new Date(Math.max(...createdTimes)).toISOString() : zone.created_at;
+      return { ...zone, precisionOnly, id: `level-${Math.round(clusterCenter)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} cluster ${fmtPrice(clusterCenter)}`, sourceType: "Persistent Level Stack", price: clusterCenter, clusterCenter, clusterLow, clusterHigh, clusterWidth, clusterPrices, tight5Count, tight10Count, tight20Count, stopPlans, score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, evidence: sortedEvidence, sourceCount, created_at: createdAt, updated_at: updatedAt, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked cluster ${fmtPrice(clusterCenter)}`, payload: { price: clusterCenter, cluster_center: clusterCenter, cluster_low: clusterLow, cluster_high: clusterHigh, cluster_width: clusterWidth, stop_plans: stopPlans, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: sortedEvidence.map((item) => ({ label: item.label, price: item.price, sourceType: item.sourceType, score: item.evidenceScore, created_at: item.created_at })) } };
+    }).filter((zone) => zone.score >= 55 && !zone.precisionOnly).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
 
     const selected = [];
     const directionCounts = { Long: 0, Short: 0, Both: 0 };
     for (const zone of scored) {
-      const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= 5 && (item.direction === zone.direction || item.direction === "Both" || zone.direction === "Both"));
+      const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= levelMergeTolerance && (item.direction === zone.direction || item.direction === "Both" || zone.direction === "Both"));
       const dir = zone.direction === "Both" ? "Both" : zone.direction;
       const underCap = dir === "Long" ? directionCounts.Long < 5 : dir === "Short" ? directionCounts.Short < 5 : directionCounts.Both < 5;
       if (!duplicate && underCap) {
@@ -1111,20 +1341,32 @@ useEffect(() => {
   }, [form, startingLevel]);
 
   const recommendations = useMemo(() => {
+    if (selectedTrade?.stopPlans?.length) {
+      return selectedTrade.stopPlans.map((plan) => ({
+        stop: plan.stop,
+        limit: plan.limit,
+        stopArea: plan.stopArea,
+        match: selectedTrade.signalName || "AI cluster center",
+        confidence: plan.confidence || (plan.valid ? "Valid" : "Too Tight"),
+        note: plan.note || (plan.valid ? "Cluster width supports this stop." : "This stop is too tight for the cluster width."),
+        valid: plan.valid
+      }));
+    }
+
     const entry = n(form.tradeEntryPrice);
     const side = dirSide(form.direction);
 
     const priorityByStop = {
       7: ["ltfVolNode", "playMakerSignal", "fvg", "orderBlock", "rejectionBlock", "lowVolumeNode"],
       10: ["lowVolumeNode", "playMakerSignal", "prevWeekLevel", "prevSessionSTDV", "fourHSTDV", "ltfVolNode"],
-      12: ["prevWeekLevel", "prevSessionSTDV", "fourHSTDV", "lowVolumeNode", "priorSessionSTDV", "liquidity"]
+      15: ["prevWeekLevel", "prevSessionSTDV", "fourHSTDV", "lowVolumeNode", "priorSessionSTDV", "liquidity"]
     };
 
     const active = report.rows
       .filter((r) => r.active && r.score > 0 && r.key !== "liquidity")
       .map((r) => ({ ...r, pullback: Math.abs(n(r.pointsAway)), signedPullback: n(r.pointsAway) }));
 
-    return [7, 10, 12].map((stop) => {
+    return [7, 10, 15].map((stop) => {
       const min = stop * 0.10;
       const max = stop * 0.85;
 
@@ -1156,7 +1398,7 @@ useEffect(() => {
           "Wider protection. Best near HTF level / STDV."
       };
     });
-  }, [report.rows, form.tradeEntryPrice, form.direction]);
+  }, [report.rows, form.tradeEntryPrice, form.direction, selectedTrade]);
 
   const behavior = useMemo(() => {
     const closed = journal.filter((j) => !isOpenOrder(j));
@@ -1286,13 +1528,18 @@ const exportJournalCSV = () => {
         ? `AI Signal: ${signalName}${baseNotes ? ` — ${baseNotes}` : ""}`
         : baseNotes;
 
+    const isAiAnchor = sourceType === "AI Signal";
+    const aiEvidence = selectedTrade?.evidence || selectedTrade?.rawSignal?.evidence || form.evidence || [];
+    const aiPayload = selectedTrade?.rawSignal || form.aiPayload || null;
+    const aiTop = selectedTrade?.top || selectedTrade?.signalName || signalName || "AI Level";
+
     return {
       id: extra.id || selectedTrade?.id || editingId || Date.now(),
-      date: new Date().toLocaleDateString(),
+      date: formatEastern(new Date()),
       direction: form.direction,
       entry: form.tradeEntryPrice,
-      grade: grade(report.score)[0],
-      score: report.score,
+      grade: isAiAnchor && selectedTrade?.grade ? selectedTrade.grade : grade(report.score)[0],
+      score: isAiAnchor && selectedTrade?.score ? selectedTrade.score : report.score,
       result: normalizedResult,
       orderStatus: normalizedResult === "Unfilled" ? "Unfilled" : "Reported",
       pendingOrder: normalizedResult === "Unfilled",
@@ -1301,11 +1548,13 @@ const exportJournalCSV = () => {
       profitLoss: form.profitLoss,
       notes,
       tradeImages: form.tradeImages,
-      top: report.active.slice(0, 4).map((r) => r.name).join(", "),
+      top: isAiAnchor ? aiTop : report.active.slice(0, 4).map((r) => r.name).join(", "),
       sourceType,
-      signal_id: extra.signal_id || selectedTrade?.signal_id || "",
+      signal_id: extra.signal_id || selectedTrade?.signal_id || aiPayload?.id || "",
       signalName,
-      formSnapshot: { ...form }
+      evidence: aiEvidence,
+      rawSignal: aiPayload,
+      formSnapshot: { ...form, evidence: aiEvidence, aiPayload }
     };
   };
 
@@ -1323,7 +1572,7 @@ const exportJournalCSV = () => {
     max_drawdown: Number(item.maxDrawdown) || null,
     profit_loss: Number(item.profitLoss) || null,
     notes: item.notes,
-    confluences: report.active,
+    confluences: item.evidence?.length ? item.evidence : report.active,
     recommendations,
     screenshots: item.tradeImages || []
   });
@@ -1418,7 +1667,7 @@ const exportJournalCSV = () => {
         max_move: Number(item.maxMove) || null,
         max_drawdown: Number(item.maxDrawdown) || null,
         profit_loss: Number(item.profitLoss) || null,
-        confluences: report.active,
+        confluences: item.evidence?.length ? item.evidence : report.active,
         recommendations,
         notes: item.notes || null
       }
@@ -1430,7 +1679,11 @@ const exportJournalCSV = () => {
   };
 
   const submitOrder = async () => {
-    const item = makeJournalItem("Unfilled", { sourceType: "Manual Order" });
+    const item = makeJournalItem("Unfilled", {
+      sourceType: selectedTrade?.sourceType || "Manual Order",
+      signal_id: selectedTrade?.signal_id || selectedTrade?.rawSignal?.id || "",
+      signalName: selectedTrade?.signalName || selectedTrade?.rawSignal?.signal || ""
+    });
     const savedItem = await saveTradeToDatabase(item, false);
 
     setJournal((j) => {
@@ -1619,15 +1872,25 @@ const exportJournalCSV = () => {
   };
 
   const selectAiSignal = (signal) => {
+    const payload = getSignalPayload(signal);
     const { next, signalText, inferredDirection, entryValue } = buildFormFromAiSignal(signal, form);
 
     const item = {
       id: `ai-${signal.id || signal.created_at || Date.now()}`,
-      date: signal.created_at ? new Date(signal.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+      date: formatEastern(signal.created_at || payload.created_at || new Date()),
+      updatedAt: formatEastern(payload.updated_at || signal.updated_at || signal.created_at || payload.created_at || new Date()),
       direction: inferredDirection,
       entry: entryValue || "",
-      grade: "AI",
-      score: 0,
+      clusterLow: payload.cluster_low,
+      clusterHigh: payload.cluster_high,
+      clusterWidth: payload.cluster_width,
+      stopPlans: payload.stop_plans,
+      grade: payload.ai_grade || "AI",
+      score: payload.ai_score || payload.zone_score || 0,
+      precisionScore: payload.precision_score || 0,
+      zoneScore: payload.zone_score || payload.ai_score || 0,
+      sourceCount: payload.source_count || payload.evidence?.length || 0,
+      evidence: payload.evidence || [],
       result: "Unfilled",
       orderStatus: "Unfilled",
       pendingOrder: true,
@@ -1640,7 +1903,7 @@ const exportJournalCSV = () => {
       sourceType: "AI Signal",
       signal_id: signal.id || "",
       signalName: signalText,
-      formSnapshot: null
+      formSnapshot: { ...next, evidence: payload.evidence || [], aiPayload: payload }
     };
 
     setSelectedTrade(item);
@@ -1659,7 +1922,13 @@ const exportJournalCSV = () => {
     }
   };
 
-  const [letter, text] = grade(report.score);
+  const [manualLetter, manualText] = grade(report.score);
+  const selectedAiScore = selectedTrade?.sourceType === "AI Signal" ? n(selectedTrade.score || selectedTrade.rawSignal?.ai_score || selectedTrade.rawSignal?.zone_score, 0) : 0;
+  const selectedAiPrecision = selectedTrade?.sourceType === "AI Signal" ? n(selectedTrade.precisionScore || selectedTrade.rawSignal?.precision_score, 0) : 0;
+  const letter = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? (selectedTrade.grade || selectedTrade.rawSignal?.ai_grade || grade(selectedAiScore)[0]) : manualLetter;
+  const text = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? "AI Level / Limit Anchor" : manualText;
+  const displayScore = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? selectedAiScore : report.score;
+  const displayPrecision = selectedTrade?.sourceType === "AI Signal" && selectedAiPrecision ? selectedAiPrecision : report.score;
   const unfilledOrders = journal.filter((j) => isOpenOrder(j));
 
   const activeAnchors = [
@@ -1667,13 +1936,31 @@ const exportJournalCSV = () => {
       ...order,
       sourceType: order.sourceType || "Manual Order"
     })),
-    ...rankedAiLimitZones.map((zone) => ({
+    ...rankedAiLimitZones
+      .filter((zone) => !unfilledOrders.some((order) => {
+        const orderEntry = parsePrice(order.entry || order.entry_price);
+        const sameDirection = String(order.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
+        const entryMatches = orderEntry !== null && Math.abs(orderEntry - zone.price) <= Math.max(2, Math.min(levelMergeTolerance, zone.clusterWidth || levelMergeTolerance));
+        const orderSignalId = String(order.signal_id || order.ai_signal_id || "");
+        const signalMatches = orderSignalId && String(zone.sourceId || "").includes(orderSignalId);
+        return sameDirection && (entryMatches || signalMatches);
+      }))
+      .map((zone) => ({
       id: `zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`,
-      date: zone.created_at ? new Date(zone.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
+      date: formatEastern(zone.created_at),
+      updatedAt: formatEastern(zone.updated_at || zone.created_at),
       direction: zone.direction,
       entry: zone.price,
+      clusterLow: zone.clusterLow,
+      clusterHigh: zone.clusterHigh,
+      clusterWidth: zone.clusterWidth,
+      stopPlans: zone.stopPlans,
       grade: zone.grade,
       score: zone.score,
+      precisionScore: zone.precisionScore,
+      zoneScore: zone.zoneScore || zone.score,
+      sourceCount: zone.sourceCount || zone.evidence?.length || 0,
+      evidence: zone.evidence || [],
       result: "Unfilled",
       orderStatus: zone.status,
       pendingOrder: true,
@@ -1682,7 +1969,7 @@ const exportJournalCSV = () => {
       profitLoss: "",
       notes: `${zone.status}: ${zone.label} — ${zone.reasons.join(" • ")}`,
       tradeImages: [],
-      top: zone.reasons.join(" • "),
+      top: `Center ${fmtPrice(zone.price)} • Width ${fmt(zone.clusterWidth)} pts • ${zone.reasons.join(" • ")}`,
       sourceType: "AI Signal",
       signal_id: zone.sourceId || "",
       signalName: zone.label,
@@ -1693,16 +1980,55 @@ const exportJournalCSV = () => {
         direction: zone.direction,
         price: zone.price,
         entry: zone.price,
+        cluster_center: zone.clusterCenter,
+        cluster_low: zone.clusterLow,
+        cluster_high: zone.clusterHigh,
+        cluster_width: zone.clusterWidth,
+        stop_plans: zone.stopPlans,
         trigger_price: zone.triggerPrice,
         ai_grade: zone.grade,
         ai_score: zone.score,
         zone_score: zone.zoneScore || zone.score,
         precision_score: zone.precisionScore || 0,
         ai_status: zone.status,
-        confluence_reasons: zone.reasons
+        confluence_reasons: zone.reasons,
+        evidence: zone.evidence || [],
+        source_count: zone.sourceCount || zone.evidence?.length || 0,
+        created_eastern: formatEastern(zone.created_at),
+        updated_eastern: formatEastern(zone.updated_at || zone.created_at)
       }
     }))
   ];
+
+  const aiAnchorsOnly = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
+  const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
+  const intermediateWatchlist = aiAnchorsOnly.filter((anchor) => ["B+", "B"].includes(anchor.grade));
+  const watchLevels = aiAnchorsOnly.filter((anchor) => anchor.grade === "C");
+
+  const learningStats = useMemo(() => {
+    const closed = journal.filter((item) => !isOpenOrder(item));
+    const bySource = {};
+    closed.forEach((item) => {
+      const sources = Array.isArray(item.formSnapshot?.evidence) ? item.formSnapshot.evidence : [];
+      const sourceNames = sources.length ? sources.map((src) => src.sourceType || src.label || "Unknown") : String(item.top || "Manual").split(",").map((x) => x.trim()).filter(Boolean);
+      sourceNames.forEach((name) => {
+        if (!bySource[name]) bySource[name] = { name, trades: 0, wins: 0, losses: 0, be: 0, maxMove: 0, maxDrawdown: 0 };
+        bySource[name].trades += 1;
+        if (item.result === "Win") bySource[name].wins += 1;
+        if (item.result === "Loss") bySource[name].losses += 1;
+        if (item.result === "BE") bySource[name].be += 1;
+        bySource[name].maxMove += n(item.maxMove);
+        bySource[name].maxDrawdown += n(item.maxDrawdown);
+      });
+    });
+    return Object.values(bySource).map((row) => ({
+      ...row,
+      winRate: row.trades ? Math.round((row.wins / row.trades) * 100) : 0,
+      avgMaxMove: row.trades ? row.maxMove / row.trades : 0,
+      avgDrawdown: row.trades ? row.maxDrawdown / row.trades : 0
+    })).sort((a, b) => b.trades - a.trades || b.winRate - a.winRate);
+  }, [journal]);
+
 
   if (!user) {
   return (
@@ -1770,10 +2096,10 @@ const exportJournalCSV = () => {
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
             <div className="flex items-start gap-5">
               <div className="text-5xl font-black text-[#00e68a]">{letter}</div>
-              <div className="mt-2 rounded-full bg-[#00d27a] px-5 py-2 text-sm font-black text-black">{report.score}/100</div>
+              <div className="mt-2 rounded-full bg-[#00d27a] px-5 py-2 text-sm font-black text-black">{displayScore}/100</div>
             </div>
             <div className="mt-1 text-lg text-zinc-200">{text}</div>
-            <div className="mt-4 h-2 rounded-full bg-zinc-900"><div className="h-full rounded-full bg-[#00d27a]" style={{width: `${report.score}%`}} /></div>
+            <div className="mt-4 h-2 rounded-full bg-zinc-900"><div className="h-full rounded-full bg-[#00d27a]" style={{width: `${displayScore}%`}} /></div>
             <div className="mt-4 rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-300">
               <div className="font-black text-[#ffcc19]">Logged in</div>
               <div className="mt-1 break-all">{user?.email || "No email"}</div>
@@ -1786,7 +2112,7 @@ const exportJournalCSV = () => {
           <Dash label="Confluences" value={report.confluences} />
           <Dash label="Within 5 Points" value={report.within5} />
           <Dash label="Zone Score" value={`${report.zoneScore}/100`} />
-          <Dash label="Precision Score" value={`${report.score}/100`} />
+          <Dash label="Precision Score" value={`${displayPrecision}/100`} />
           <Dash label="Behavior Score" value={`${behavior.score}/10`} />
         </div>
 
@@ -1813,29 +2139,19 @@ const exportJournalCSV = () => {
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Active Trade Anchors</div>
-                <p className="mt-1 text-sm text-zinc-400">Manual orders and AI signals. Click one to load its trade info, checklist, grade, and report form.</p>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">👑 Crown Level Board</div>
+                <p className="mt-1 text-sm text-zinc-400">Persistent AI levels, clustered sources, precision entries, and private result-learning for your account only.</p>
               </div>
               <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review / Report</button>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              {activeAnchors.map((anchor) => (
-                <button
-                  key={anchor.id}
-                  onClick={() => selectActiveAnchor(anchor)}
-                  className={`rounded-2xl border bg-[#090909] p-4 text-left transition hover:border-[#ffcc19] ${selectedTrade?.id === anchor.id ? "border-[#ffcc19]" : "border-[#2c2300]"}`}
-                >
-                  <div className="mb-2 inline-flex rounded-full bg-[#ffcc19] px-3 py-1 text-xs font-black text-black">
-                    {anchor.sourceType === "AI Signal" ? "AI SIGNAL" : "MANUAL ORDER"}
-                  </div>
-                  <div className="text-xl font-black text-[#00d27a]">
-                    {anchor.direction}: {anchor.entry ? Number(anchor.entry).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--"}
-                  </div>
-                  <div className="mt-1 text-sm text-zinc-400">Grade {anchor.grade} • {anchor.score}/100</div>
-                  <div className="mt-1 text-xs text-zinc-500">{anchor.date} • {anchor.top || "No top confluence saved"}</div>
-                </button>
-              ))}
-            </div>
+
+            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} />
+            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} />
+            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} />
+
+            {unfilledOrders.length > 0 && (
+              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} />
+            )}
           </div>
         )}
 
@@ -2122,7 +2438,7 @@ const exportJournalCSV = () => {
           </div>
         )}
 
-        {tab === "behavior" && <Behavior behavior={behavior} journal={journal} />}
+        {tab === "behavior" && <Behavior behavior={behavior} journal={journal} learningStats={learningStats} />}
         {tab === "breakdown" && <Breakdown report={report} recommendations={recommendations} tips={tips} />}
         {tab === "journal" && (
           <Journal
@@ -2139,6 +2455,119 @@ const exportJournalCSV = () => {
       </div>
     </div>
     </WhopGate>
+  );
+}
+
+function sourceGroupName(sourceType = "") {
+  const text = String(sourceType);
+  if (text.includes("STDV") || text.includes("Deviation")) return "STDV";
+  if (text.includes("Volume Profile")) return "Volume Profile";
+  if (text.includes("Crater") || text.includes("LVN")) return "Craters / LVN";
+  if (text.includes("Weekly")) return "Weekly";
+  if (text.includes("PlayMaker")) return "PlayMaker";
+  if (text.includes("OTE") || text.includes("Retrace")) return "OTE";
+  if (text.includes("Order") || text.includes("Rejection")) return "Structure";
+  return "Other";
+}
+
+function EvidenceList({ evidence = [] }) {
+  if (!Array.isArray(evidence) || evidence.length === 0) {
+    return <div className="mt-3 text-xs text-zinc-500">No source breakdown saved.</div>;
+  }
+
+  const groups = evidence.reduce((acc, item) => {
+    const key = sourceGroupName(item.sourceType);
+    acc[key] = acc[key] || [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  return (
+    <div className="mt-3 rounded-xl border border-zinc-800 bg-black/60 p-3">
+      <div className="mb-2 text-xs font-black uppercase tracking-[0.14em] text-[#ffcc19]">All Sources</div>
+      <div className="space-y-2">
+        {Object.entries(groups).map(([group, items]) => (
+          <div key={group}>
+            <div className="text-[11px] font-black uppercase text-zinc-400">{group}</div>
+            <div className="mt-1 space-y-1">
+              {items.map((item, idx) => (
+                <div key={`${group}-${idx}`} className="flex items-start justify-between gap-2 text-xs text-zinc-300">
+                  <span>✓ {item.label || item.sourceType} @ {fmtPrice(item.price)}</span>
+                  <span className="shrink-0 font-black text-[#00d27a]">+{Number(item.evidenceScore ?? item.score ?? 0).toFixed(0)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LevelCard({ anchor, selectedTrade, onSelect }) {
+  const isAi = anchor.sourceType === "AI Signal";
+  const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
+  const selected = selectedTrade?.id === anchor.id;
+  return (
+    <button
+      onClick={() => onSelect(anchor)}
+      className={`rounded-2xl border bg-[#090909] p-4 text-left transition hover:border-[#ffcc19] ${selected ? "border-[#ffcc19]" : "border-[#2c2300]"}`}
+    >
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="inline-flex rounded-full bg-[#ffcc19] px-3 py-1 text-xs font-black text-black">
+          {isAi ? (anchor.grade === "A+" ? "👑 CROWN ANCHOR" : "AI LEVEL") : "MANUAL ORDER"}
+        </span>
+        {isAi && <span className="rounded-full border border-zinc-700 px-3 py-1 text-xs font-black text-zinc-300">Sources {anchor.sourceCount || evidence.length || 0}</span>}
+      </div>
+
+      <div className="text-xl font-black text-[#00d27a]">
+        {anchor.direction}: {anchor.entry ? fmtPrice(anchor.entry) : "--"}
+      </div>
+
+      <div className="mt-1 text-sm text-zinc-400">
+        Grade {anchor.grade} • Zone {anchor.zoneScore || anchor.score}/100{anchor.precisionScore ? ` • Precision ${anchor.precisionScore}/100` : ""}
+      </div>
+
+      {anchor.clusterWidth !== undefined && (
+        <div className="mt-1 text-xs text-[#ffcc19]">
+          Center {fmtPrice(anchor.entry)} • Cluster {fmtPrice(anchor.clusterLow)}–{fmtPrice(anchor.clusterHigh)} • Width {fmt(anchor.clusterWidth)} pts
+        </div>
+      )}
+
+      {anchor.stopPlans && (
+        <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] text-zinc-300">
+          {anchor.stopPlans.map((plan) => (
+            <div key={plan.stop} className={`rounded border px-2 py-1 ${plan.valid ? "border-[#00d27a]" : "border-zinc-700 text-zinc-500"}`}>
+              {plan.stop}pt<br />{plan.valid ? "OK" : "Too tight"}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 text-xs text-zinc-500">
+        Created: {anchor.date || "--"}{anchor.updatedAt ? ` • Updated: ${anchor.updatedAt}` : ""}
+      </div>
+
+      {anchor.top && <div className="mt-2 text-xs text-zinc-500">{anchor.top}</div>}
+      {isAi && <EvidenceList evidence={evidence} />}
+    </button>
+  );
+}
+
+function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect }) {
+  if (!items.length) return null;
+  return (
+    <div className="mt-5">
+      <div className="mb-3">
+        <div className="text-lg font-black text-white">{title}</div>
+        {subtitle && <div className="text-sm text-zinc-500">{subtitle}</div>}
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {items.map((anchor) => (
+          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2185,7 +2614,8 @@ function Conf({ title, base, active, onActive, sub, children }) {
 }
 
 function Rec({ r }) {
-  return <div className="rounded-2xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between"><div className="text-lg font-black text-[#ffcc19]">{r.stop}pt Stop</div><div className="rounded-full bg-[#00d27a] px-3 py-1 text-xs font-black text-black">{r.confidence}</div></div><div className="mt-3 grid grid-cols-2 gap-3"><Small label="Limit" value={fmt(r.limit)} /><Small label="Stop" value={fmt(r.stopArea)} /></div><p className="mt-3 text-sm text-zinc-400">Based on: {r.match}</p>{r.note && <p className="mt-1 text-xs text-zinc-500">{r.note}</p>}</div>;
+  const isInvalid = r.valid === false;
+  return <div className={`rounded-2xl border bg-[#090909] p-4 ${isInvalid ? "border-zinc-700 opacity-70" : "border-zinc-800"}`}><div className="flex items-center justify-between"><div className="text-lg font-black text-[#ffcc19]">{r.stop}pt Stop</div><div className={`rounded-full px-3 py-1 text-xs font-black ${isInvalid ? "bg-zinc-700 text-zinc-300" : "bg-[#00d27a] text-black"}`}>{r.confidence}</div></div><div className="mt-3 grid grid-cols-2 gap-3"><Small label="Limit" value={fmt(r.limit)} /><Small label="Stop" value={fmt(r.stopArea)} /></div><p className="mt-3 text-sm text-zinc-400">Based on: {r.match}</p>{r.note && <p className="mt-1 text-xs text-zinc-500">{r.note}</p>}</div>;
 }
 
 function Small({ label, value }) {
@@ -2200,6 +2630,6 @@ function Journal({ journal, saveTrade, editTrade, exportJournalCSV, form, set, e
   return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId || form.result !== "Unfilled" ? "Save Result" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
 }
 
-function Behavior({ behavior, journal }) {
-  return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Behavior Rating</Title><div className="mt-6 text-7xl font-black text-[#00d27a]">{behavior.score}/10</div><p className="mt-3 text-zinc-300">Based on saved results and notes. Notes mentioning chasing/late reduce behavior score. Notes mentioning patience/followed plan improve it.</p><div className="mt-5 grid grid-cols-4 gap-3"><Small label="Trades" value={behavior.total} /><Small label="Wins" value={behavior.wins} /><Small label="Losses" value={behavior.losses} /><Small label="BE" value={behavior.be} /></div></Card><Card><Title>Behavior Notes</Title><div className="mt-4 space-y-3">{journal.slice(0,5).map((j) => <div key={j.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><b>{j.result}</b><p className="mt-1 text-zinc-400">{j.notes || "No notes"}</p></div>)}{journal.length === 0 && <div className="text-zinc-500">Save journal results to populate behavior reports.</div>}</div></Card></div>;
+function Behavior({ behavior, journal, learningStats = [] }) {
+  return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Behavior Rating</Title><div className="mt-6 text-7xl font-black text-[#00d27a]">{behavior.score}/10</div><p className="mt-3 text-zinc-300">Based on saved results and notes. Notes mentioning chasing/late reduce behavior score. Notes mentioning patience/followed plan improve it.</p><div className="mt-5 grid grid-cols-4 gap-3"><Small label="Trades" value={behavior.total} /><Small label="Wins" value={behavior.wins} /><Small label="Losses" value={behavior.losses} /><Small label="BE" value={behavior.be} /></div></Card><Card><Title>Private AI Result Learning</Title><p className="mt-2 text-sm text-zinc-400">Only your logged-in account sees this. It calculates which source families and repeat-level combinations are working from your saved results.</p><div className="mt-4 space-y-3">{learningStats.slice(0,8).map((row) => <div key={row.name} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between gap-3"><b className="text-[#ffcc19]">{row.name}</b><span className="font-black text-[#00d27a]">{row.winRate}%</span></div><div className="mt-1 text-xs text-zinc-500">Trades {row.trades} • Wins {row.wins} • Losses {row.losses} • BE {row.be} • Avg move {fmt(row.avgMaxMove)} • Avg DD {fmt(row.avgDrawdown)}</div></div>)}{learningStats.length === 0 && <div className="text-zinc-500">Save completed trade results to populate AI learning stats.</div>}</div></Card><Card className="lg:col-span-2"><Title>Behavior Notes</Title><div className="mt-4 space-y-3">{journal.slice(0,5).map((j) => <div key={j.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><b>{j.result}</b><p className="mt-1 text-zinc-400">{j.notes || "No notes"}</p></div>)}{journal.length === 0 && <div className="text-zinc-500">Save journal results to populate behavior reports.</div>}</div></Card></div>;
 }
