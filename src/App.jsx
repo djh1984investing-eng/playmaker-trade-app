@@ -35,7 +35,7 @@ const baseWeights = {
   liquidity: 8
 };
 
-const stdvChoices = ["0", "0.5", "0.705", "1", "1.5", "2", "2.25", "2.5", "3", "3.5", "4", "4.5", "-0.5", "-0.705", "-1", "-1.5", "-2", "-2.25", "-2.5", "-3", "-3.5", "-4", "-4.25", "-4.5"];
+const stdvChoices = ["0", "0.5", "0.705", "1", "1.5", "2", "2.25", "2.5", "3", "3.5", "4", "4.5", "5", "5.5", "6", "-0.5", "-0.705", "-1", "-1.5", "-2", "-2.25", "-2.5", "-3", "-3.5", "-4", "-4.5", "-5", "-5.5", "-6"];
 const retraceChoices = ["None", "0.50", "0.618", "0.705", "0.786"];
 const tfChoices = ["5m", "15m", "1H", "4H"];
 
@@ -704,17 +704,45 @@ useEffect(() => {
     const match = String(name || "").match(/(-?\d+(?:_\d+)?|-?\d+(?:\.\d+)?)/);
     if (!match) return 0;
     const value = Math.abs(Number(match[1].replace("_", ".")));
-    if (value >= 4) return 24;
-    if (value >= 3.5) return 22;
-    if (value >= 3) return 20;
-    if (value >= 2.5) return 17;
+
+    // Manual-style weighting:
+    // ±3 is where the level becomes a serious candidate.
+    // ±4 and beyond are premium reaction zones.
+    // ±5 to ±6 are elite, but they still need another level nearby before being promoted.
+    if (value >= 6) return 58;
+    if (value >= 5.5) return 54;
+    if (value >= 5) return 50;
+    if (value >= 4.5) return 45;
+    if (value >= 4) return 40;
+    if (value >= 3.5) return 35;
+    if (value >= 3) return 30;
+    if (value >= 2.5) return 18;
     if (value >= 2) return 14;
-    if (value >= 1.5) return 11;
-    if (value >= 1) return 8;
-    if (value >= 0.705) return 6;
-    if (value >= 0.5) return 4;
+    if (value >= 1.5) return 10;
+    if (value >= 1) return 7;
+    if (value >= 0.705) return 5;
+    if (value >= 0.5) return 3;
     return 0;
   };
+
+  const deviationValueFromLabel = (label) => {
+    const match = String(label || "").match(/(-?\d+(?:_\d+)?|-?\d+(?:\.\d+)?)/);
+    if (!match) return 0;
+    return Number(match[1].replace("_", "."));
+  };
+
+  const isMajorDeviationLabel = (label) => Math.abs(deviationValueFromLabel(label)) >= 3;
+
+  const aiGrade = (score) => {
+    if (score >= 92) return "A+";
+    if (score >= 84) return "A";
+    if (score >= 74) return "B+";
+    if (score >= 65) return "B";
+    if (score >= 55) return "C";
+    return "D";
+  };
+
+  const sessionRankLimit = 5;
 
   const scoreDistance = (distance, tight, medium, wide) => {
     if (!Number.isFinite(distance)) return 0;
@@ -767,34 +795,77 @@ useEffect(() => {
       .sort((a, b) => a.distance - b.distance)[0] || null;
   };
 
-  const buildLimitZoneCandidates = (signal) => {
+  const levelMergeTolerance = 7;
+
+  const getLevelKey = (price) => {
+    const parsed = parsePrice(price);
+    if (parsed === null) return "na";
+    return String(Math.round(parsed / 5) * 5);
+  };
+
+  const deviationAbsFromLabel = (label) => {
+    const match = String(label || "").match(/[-+]?\d+(?:\.\d+)?/);
+    return match ? Math.abs(Number(match[0])) : 0;
+  };
+
+  const deviationEvidenceScore = (label) => {
+    const value = deviationAbsFromLabel(label);
+    if (value >= 6) return 52;
+    if (value >= 5.5) return 48;
+    if (value >= 5) return 44;
+    if (value >= 4.5) return 40;
+    if (value >= 4) return 36;
+    if (value >= 3.5) return 31;
+    if (value >= 3) return 26;
+    if (value >= 2.5) return 16;
+    if (value >= 2) return 12;
+    if (value >= 1.5) return 9;
+    if (value >= 1) return 6;
+    if (value >= 0.705) return 4;
+    if (value >= 0.5) return 3;
+    return 0;
+  };
+
+  const timeframeFromPayload = (payload, fallback = "") => {
+    const raw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, fallback) || "").toUpperCase();
+    if (raw.includes("240") || raw.includes("4H")) return "4H";
+    if (raw.includes("60") || raw.includes("1H")) return "1H";
+    if (raw.includes("15")) return "15m";
+    if (raw.includes("5")) return "5m";
+    return "";
+  };
+
+  const structureEvidenceScore = (payload, fallback, type) => {
+    const tf = timeframeFromPayload(payload, fallback);
+    const isRB = String(type || "").toUpperCase().includes("REJECTION");
+    if (tf === "4H") return isRB ? 18 : 20;
+    if (tf === "1H") return isRB ? 13 : 15;
+    if (tf === "15m") return isRB ? 5 : 6;
+    if (tf === "5m") return 0;
+    return isRB ? 8 : 9;
+  };
+
+  const craterQualityScore = (crater) => {
+    if (!crater) return 0;
+    const width = n(crater.width);
+    const widthScore = width >= 120 ? 28 : width >= 80 ? 24 : width >= 50 ? 18 : width >= 25 ? 12 : 7;
+    const locationScore = crater.inside ? 18 : 16 * scoreDistance(crater.distance, 3, 7, 15);
+    return widthScore + locationScore;
+  };
+
+  const buildLevelEvidenceCandidates = (signal) => {
     const payload = getSignalPayload(signal);
     const signalName = String(payload.signal || payload.setup || signal.signal || "AI Signal");
     const type = signalName.toUpperCase();
     const session = String(payload.session || payload.session_name || payload.timeframe || signal.timeframe || "GLOBAL");
     const triggerPrice = parsePrice(firstDefined(payload.trigger_price, payload.price, payload.entry, payload.entry_price, signal.price));
     const created = signal.created_at || payload.created_at;
-    const base = {
-      sourceSignal: signal,
-      payload,
-      sourceId: signal.id || payload.id || created || signalName,
-      created_at: created,
-      session,
-      triggerPrice,
-      signalName
-    };
+    const base = { sourceSignal: signal, payload, sourceId: signal.id || payload.id || created || signalName, created_at: created, session, triggerPrice, signalName };
 
-    const make = (price, label, direction, sourceType, extraScore = 0) => {
+    const make = (price, label, direction, sourceType, evidenceScore = 0, evidenceClass = "support") => {
       const parsed = parsePrice(price);
       if (parsed === null || parsed <= 0) return null;
-      return {
-        ...base,
-        price: parsed,
-        label,
-        direction: normalizeDirection(direction, signalName),
-        sourceType,
-        extraScore
-      };
+      return { ...base, price: parsed, label, direction: normalizeDirection(direction, signalName), sourceType, evidenceScore, evidenceClass, levelKey: getLevelKey(parsed) };
     };
 
     const candidates = [];
@@ -802,47 +873,44 @@ useEffect(() => {
 
     if (type.includes("SESSION_DEVIATION")) {
       const levels = [
-        ["-4", payload.neg_4], ["-3.5", payload.neg_3_5], ["-3", payload.neg_3], ["-2.5", payload.neg_2_5],
-        ["-2", payload.neg_2], ["-1.5", payload.neg_1_5], ["-1", payload.neg_1], ["-0.786", payload.neg_0786],
-        ["-0.705", payload.neg_0705], ["-0.618", payload.neg_0618], ["-0.5", payload.neg_05],
-        ["+0.5", payload.pos_05], ["+0.618", payload.pos_0618], ["+0.705", payload.pos_0705], ["+0.786", payload.pos_0786],
-        ["+1", payload.pos_1], ["+1.5", payload.pos_1_5], ["+2", payload.pos_2], ["+2.5", payload.pos_2_5],
-        ["+3", payload.pos_3], ["+3.5", payload.pos_3_5], ["+4", payload.pos_4]
+        ["-6", payload.neg_6], ["-5.5", payload.neg_5_5], ["-5", payload.neg_5], ["-4.5", payload.neg_4_5], ["-4", payload.neg_4], ["-3.5", payload.neg_3_5], ["-3", payload.neg_3], ["-2.5", payload.neg_2_5], ["-2", payload.neg_2], ["-1.5", payload.neg_1_5], ["-1", payload.neg_1], ["-0.786", payload.neg_0786], ["-0.705", payload.neg_0705], ["-0.618", payload.neg_0618], ["-0.5", payload.neg_05],
+        ["+0.5", payload.pos_05], ["+0.618", payload.pos_0618], ["+0.705", payload.pos_0705], ["+0.786", payload.pos_0786], ["+1", payload.pos_1], ["+1.5", payload.pos_1_5], ["+2", payload.pos_2], ["+2.5", payload.pos_2_5], ["+3", payload.pos_3], ["+3.5", payload.pos_3_5], ["+4", payload.pos_4], ["+4.5", payload.pos_4_5], ["+5", payload.pos_5], ["+5.5", payload.pos_5_5], ["+6", payload.pos_6]
       ];
       levels.forEach(([name, value]) => {
         const dir = String(name).startsWith("-") ? "Long" : "Short";
-        push(make(value, `${session} deviation ${name}`, dir, "Prev Session Deviation", 28 + deviationStrength(name)));
+        const abs = deviationAbsFromLabel(name);
+        push(make(value, `${session} deviation ${name}`, dir, abs >= 3 ? "Major Session Deviation" : "Session Deviation", deviationEvidenceScore(name), abs >= 3 ? "anchor" : "support"));
       });
     }
 
     if (type.includes("CONFLUENCE")) {
       const price = firstDefined(payload.confluence_price, payload.htf_confluence_price, payload.price, payload.trigger_price);
-      push(make(price, `PlayMaker confluence ${payload.sources || payload.matches || ""}`.trim(), payload.direction, "PlayMaker Confluence", 42 + Math.min(18, n(payload.matches || payload.count || payload.htfConfluenceCount) * 4)));
+      const count = n(firstDefined(payload.confluence_count, payload.matches, payload.count, payload.htfConfluenceCount), 1);
+      push(make(price, `PlayMaker confluence ${payload.sources || payload.confluence_sources || payload.matches || ""}`.trim(), payload.direction, "PlayMaker Confluence", 26 + Math.min(24, count * 6), "major"));
     }
 
     if (type.includes("ORDER_BLOCK") || type.includes("ORDER BLOCK")) {
-      const high = parsePrice(firstDefined(payload.high, payload.ob_high, payload.top));
-      const low = parsePrice(firstDefined(payload.low, payload.ob_low, payload.bottom));
+      const high = parsePrice(firstDefined(payload.high, payload.ob_high, payload.top, payload.block_top));
+      const low = parsePrice(firstDefined(payload.low, payload.ob_low, payload.bottom, payload.block_bottom));
       const ce = parsePrice(firstDefined(payload.ce, payload.ob_ce, high !== null && low !== null ? (high + low) / 2 : null));
-      push(make(ce, `Order block CE`, firstDefined(payload.direction, signalName), "Order Block", 24));
+      const score = structureEvidenceScore(payload, signalName, "ORDER_BLOCK");
+      if (score > 0) push(make(ce, `${timeframeFromPayload(payload, signalName) || "HTF"} order block CE`, firstDefined(payload.direction, signalName), "Order Block", score, score >= 13 ? "major" : "minor"));
     }
 
     if (type.includes("REJECTION_BLOCK") || type.includes("REJECTION BLOCK")) {
-      const high = parsePrice(firstDefined(payload.high, payload.rb_high, payload.top));
-      const low = parsePrice(firstDefined(payload.low, payload.rb_low, payload.bottom));
+      const high = parsePrice(firstDefined(payload.high, payload.rb_high, payload.top, payload.block_top));
+      const low = parsePrice(firstDefined(payload.low, payload.rb_low, payload.bottom, payload.block_bottom));
       const ce = parsePrice(firstDefined(payload.ce, payload.rb_ce, high !== null && low !== null ? (high + low) / 2 : null));
-      push(make(ce, `Rejection block CE`, firstDefined(payload.direction, signalName), "Rejection Block", 22));
+      const score = structureEvidenceScore(payload, signalName, "REJECTION_BLOCK");
+      if (score > 0) push(make(ce, `${timeframeFromPayload(payload, signalName) || "HTF"} rejection block CE`, firstDefined(payload.direction, signalName), "Rejection Block", score, score >= 13 ? "major" : "minor"));
     }
 
     if (type.includes("RETRACE")) {
-      const fibs = [
-        ["0.50", payload.fib_050],
-        ["0.618", payload.fib_0618],
-        ["0.705", payload.fib_0705],
-        ["0.786", payload.fib_0786]
-      ];
-      fibs.forEach(([name, value]) => {
-        push(make(value, `${signalName} ${name}`, payload.direction, "HTF / LTF Retrace", name === "0.786" ? 14 : name === "0.705" ? 12 : name === "0.618" ? 10 : 7));
+      const tf = timeframeFromPayload(payload, signalName);
+      const tfScore = tf === "4H" ? 24 : tf === "1H" ? 20 : tf === "15m" ? 12 : 8;
+      [["0.50", payload.fib_050], ["0.618", payload.fib_0618], ["0.705", payload.fib_0705], ["0.786", payload.fib_0786]].forEach(([name, value]) => {
+        const fibBonus = name === "0.786" ? 5 : name === "0.705" ? 4 : name === "0.618" ? 3 : 1;
+        push(make(value, `${signalName} ${name}`, payload.direction, "OTE Retracement", tfScore + fibBonus, tf === "4H" || tf === "1H" ? "major" : "support"));
       });
     }
 
@@ -850,56 +918,81 @@ useEffect(() => {
   };
 
   const rankedAiLimitZones = useMemo(() => {
-    const rawCandidates = unfilledAiSignals.flatMap(buildLimitZoneCandidates);
+    const rawEvidence = unfilledAiSignals.flatMap(buildLevelEvidenceCandidates);
+    const seedLevels = [
+      ...weeklyLevels.map((level) => ({ price: Number(level.price), direction: "Both", label: `Weekly ${level.name || "level"}`, sourceType: "Weekly Level", evidenceScore: 24, evidenceClass: "pillar", session: "WEEKLY", sourceId: `weekly-${level.id}`, created_at: level.created_at, payload: level, signalName: "Weekly Level", triggerPrice: null, levelKey: getLevelKey(level.price) })).filter((item) => Number.isFinite(item.price) && item.price > 0),
+      ...craterBoxes.flatMap((box) => {
+        const top = Number(box.top_price), bottom = Number(box.bottom_price);
+        if (!Number.isFinite(top) || !Number.isFinite(bottom) || top <= 0 || bottom <= 0 || top === bottom) return [];
+        const high = Math.max(top, bottom), low = Math.min(top, bottom), mid = (high + low) / 2, width = Math.abs(high - low);
+        const score = width >= 120 ? 34 : width >= 80 ? 30 : width >= 50 ? 24 : width >= 25 ? 17 : 11;
+        return [{ price: mid, direction: "Both", label: `${box.name || "Crater"} mid ${fmt(width)} pts wide`, sourceType: "Volume Crater / LVN", evidenceScore: score, evidenceClass: "pillar", session: "CRATER", sourceId: `crater-${box.id}`, created_at: box.created_at, payload: box, signalName: "Crater Box", triggerPrice: null, high, low, mid, width, levelKey: getLevelKey(mid) }];
+      })
+    ];
 
-    const scored = rawCandidates.map((zone) => {
+    const zones = [];
+    [...seedLevels, ...rawEvidence].forEach((ev) => {
+      const price = parsePrice(ev.price);
+      if (price === null || price <= 0) return;
+      const direction = ev.direction === "Both" ? "Both" : ev.direction;
+      let zone = zones.find((item) => Math.abs(item.price - price) <= levelMergeTolerance && (item.direction === direction || item.direction === "Both" || direction === "Both"));
+      if (!zone) {
+        zone = { price, direction, evidence: [], sessions: new Set(), sourceIds: new Set(), created_at: ev.created_at, triggerPrice: ev.triggerPrice, payload: ev.payload, sourceId: ev.sourceId };
+        zones.push(zone);
+      }
+      zone.evidence.push({ ...ev, price });
+      if (ev.session) zone.sessions.add(ev.session);
+      if (ev.sourceId) zone.sourceIds.add(String(ev.sourceId));
+      zone.price = zone.evidence.reduce((sum, item) => sum + item.price, 0) / zone.evidence.length;
+      if (zone.direction === "Both" && direction !== "Both") zone.direction = direction;
+    });
+
+    const scored = zones.map((zone) => {
       const weekly = nearestWeeklyToPrice(zone.price);
       const crater = nearestCraterToPrice(zone.price);
-      const triggerDistance = zone.triggerPrice !== null ? Math.abs(zone.triggerPrice - zone.price) : null;
-
-      const weeklyScore = weekly ? 26 * scoreDistance(weekly.distance, 3, 7, 15) : 0;
-      const craterScore = crater ? (crater.inside ? 30 : 28 * scoreDistance(crater.distance, 3, 7, 15)) : 0;
-      const craterWidthBonus = crater ? Math.min(10, Math.max(0, n(crater.width) / 12)) : 0;
-      const playmakerBonus = zone.sourceType === "PlayMaker Confluence" ? 18 : 0;
-      const structureBonus = ["Order Block", "Rejection Block"].includes(zone.sourceType) ? 8 : 0;
-      const retraceOnlyPenalty = zone.sourceType === "HTF / LTF Retrace" && !weeklyScore && !craterScore ? -25 : 0;
-
-      const score = Math.round(clamp(zone.extraScore + weeklyScore + craterScore + craterWidthBonus + playmakerBonus + structureBonus + retraceOnlyPenalty, 0, 100));
+      const sourceTypes = new Set(zone.evidence.map((item) => item.sourceType));
+      const majorDeviation = zone.evidence.find((item) => item.sourceType === "Major Session Deviation");
+      const minorDeviation = zone.evidence.find((item) => item.sourceType === "Session Deviation");
+      const hasPlaymaker = sourceTypes.has("PlayMaker Confluence");
+      const hasOTE = sourceTypes.has("OTE Retracement");
+      const hasWeekly = Boolean(weekly) || sourceTypes.has("Weekly Level");
+      const hasCrater = Boolean(crater) || sourceTypes.has("Volume Crater / LVN");
+      const hasHTFStructure = zone.evidence.some((item) => ["Order Block", "Rejection Block"].includes(item.sourceType) && item.evidenceScore >= 13);
+      const evidenceScore = zone.evidence.reduce((sum, item) => sum + n(item.evidenceScore), 0);
+      const pillarScore = (hasWeekly ? 22 * scoreDistance(weekly?.distance ?? 0, 3, 7, 15) : 0) + (hasCrater ? craterQualityScore(crater) : 0);
+      const stackCount = [Boolean(majorDeviation), hasPlaymaker, hasOTE, hasWeekly, hasCrater, hasHTFStructure, Boolean(minorDeviation)].filter(Boolean).length;
+      const rawZoneScore = evidenceScore + pillarScore + Math.min(16, sourceTypes.size * 3) + stackCount * 6 - (!majorDeviation && !hasWeekly && !hasCrater && !hasPlaymaker ? 20 : 0);
+      const score = Math.round(clamp(rawZoneScore, 0, 100));
       const [zoneGrade] = grade(score);
-      const status = triggerDistance !== null && triggerDistance <= 12 ? "READY LIMIT ZONE" : "WATCHLIST LIMIT ZONE";
+      const triggerDistances = zone.evidence.map((item) => item.triggerPrice !== null ? Math.abs(item.triggerPrice - zone.price) : null).filter((value) => value !== null);
+      const nearestTriggerDistance = triggerDistances.length ? Math.min(...triggerDistances) : null;
+      const precisionScore = nearestTriggerDistance === null ? 0 : Math.round(clamp(100 - nearestTriggerDistance * 4, 0, 100));
+      const status = precisionScore >= 70 ? "READY LIMIT LEVEL" : precisionScore >= 35 ? "APPROACHING LIMIT LEVEL" : "WATCHLIST LIMIT LEVEL";
       const reasons = [
-        zone.sourceType,
-        weekly && weekly.distance <= 15 ? `Weekly ${weekly.name || "level"} ${fmt(weekly.distance)} pts` : null,
-        crater && crater.distance <= 15 ? `${crater.inside ? "Inside" : "Near"} crater ${crater.name || "box"} ${fmt(crater.distance)} pts` : null,
-        triggerDistance !== null ? `Current price ${fmt(triggerDistance)} pts away` : null
+        majorDeviation ? majorDeviation.label : null,
+        hasPlaymaker ? "PlayMaker confluence" : null,
+        hasOTE ? "OTE retracement" : null,
+        hasWeekly && weekly ? `Weekly ${weekly.name || "level"} ${fmt(weekly.distance)} pts` : (sourceTypes.has("Weekly Level") ? "Weekly level" : null),
+        hasCrater && crater ? `${crater.inside ? "Inside" : "Near"} crater ${crater.name || "box"} ${fmt(crater.distance)} pts / ${fmt(crater.width)} wide` : (sourceTypes.has("Volume Crater / LVN") ? "Crater/LVN" : null),
+        hasHTFStructure ? "1H/4H OB/RB structure" : null,
+        minorDeviation && !majorDeviation ? "Prior/minor deviation support" : null,
+        nearestTriggerDistance !== null ? `Current price ${fmt(nearestTriggerDistance)} pts away` : "Limit level can be far from current price"
       ].filter(Boolean);
+      return { ...zone, id: `level-${Math.round(zone.price)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} level ${fmtPrice(zone.price)}`, sourceType: "Persistent Level Stack", score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked level ${fmtPrice(zone.price)}`, payload: { price: zone.price, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: zone.evidence.map((item) => ({ label: item.label, sourceType: item.sourceType, score: item.evidenceScore })) } };
+    }).filter((zone) => zone.score >= 55).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
 
-      return {
-        ...zone,
-        score,
-        grade: zoneGrade,
-        status,
-        triggerDistance,
-        weekly,
-        crater,
-        reasons
-      };
-    })
-      .filter((zone) => zone.score >= 74)
-      .sort((a, b) => b.score - a.score || (a.triggerDistance ?? 9999) - (b.triggerDistance ?? 9999));
-
-    const perSessionCount = {};
     const selected = [];
+    const directionCounts = { Long: 0, Short: 0, Both: 0 };
     for (const zone of scored) {
-      const key = zone.session || "GLOBAL";
-      perSessionCount[key] = perSessionCount[key] || 0;
-      const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= 2 && item.direction === zone.direction && item.session === zone.session);
-      if (!duplicate && perSessionCount[key] < 4) {
+      const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= 5 && (item.direction === zone.direction || item.direction === "Both" || zone.direction === "Both"));
+      const dir = zone.direction === "Both" ? "Both" : zone.direction;
+      const underCap = dir === "Long" ? directionCounts.Long < 5 : dir === "Short" ? directionCounts.Short < 5 : directionCounts.Both < 5;
+      if (!duplicate && underCap) {
         selected.push(zone);
-        perSessionCount[key] += 1;
+        directionCounts[dir] += 1;
       }
+      if (selected.length >= 10) break;
     }
-
     return selected;
   }, [unfilledAiSignals, weeklyLevels, craterBoxes]);
 
@@ -1603,6 +1696,8 @@ const exportJournalCSV = () => {
         trigger_price: zone.triggerPrice,
         ai_grade: zone.grade,
         ai_score: zone.score,
+        zone_score: zone.zoneScore || zone.score,
+        precision_score: zone.precisionScore || 0,
         ai_status: zone.status,
         confluence_reasons: zone.reasons
       }
