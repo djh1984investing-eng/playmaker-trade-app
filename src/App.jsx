@@ -1930,6 +1930,11 @@ const exportJournalCSV = () => {
   const displayScore = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? selectedAiScore : report.score;
   const displayPrecision = selectedTrade?.sourceType === "AI Signal" && selectedAiPrecision ? selectedAiPrecision : report.score;
   const unfilledOrders = journal.filter((j) => isOpenOrder(j));
+  const selectedEntryEvidence = selectedTrade?.evidence || selectedTrade?.rawSignal?.evidence || [];
+  const selectedVpEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").startsWith("Volume Profile"));
+  const selectedPocEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("POC"));
+  const selectedLvnEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("LVN"));
+  const selectedEntryIsCrown = ["A+", "A"].includes(selectedTrade?.grade);
 
   const activeAnchors = [
     ...unfilledOrders.map((order) => ({
@@ -2086,10 +2091,13 @@ const exportJournalCSV = () => {
   return (
     <WhopGate>
     <div className="min-h-screen bg-[#080808] text-white">
-      <div className="mx-auto max-w-[1500px] p-4 md:p-6">
-        <div className="grid gap-5 lg:grid-cols-[1fr_230px]">
+      <div className="relative mx-auto max-w-[1500px] p-4 md:p-6">
+        <div className="pointer-events-none absolute right-4 top-4 z-20 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#ffcc19] bg-black/90 text-3xl shadow-xl shadow-yellow-950/30" title="PlayMaker Crown">
+          👑
+        </div>
+        <div className="grid gap-5 pr-16 lg:grid-cols-[1fr_230px]">
           <div>
-            <div className="mb-5 text-[#ffcc19] font-black tracking-[0.24em] text-sm">♕ THE PLAYMAKER</div>
+            <div className="mb-5 text-[#ffcc19] font-black tracking-[0.24em] text-sm">THE PLAYMAKER</div>
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
           </div>
@@ -2116,19 +2124,38 @@ const exportJournalCSV = () => {
           <Dash label="Behavior Score" value={`${behavior.score}/10`} />
         </div>
 
-        <div className="mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
-          <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="relative mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
+          {selectedEntryIsCrown && (
+            <div className="absolute right-4 top-4 rounded-2xl border border-[#ffcc19] bg-[#171200] px-3 py-2 text-2xl" title="Crown-grade entry">
+              👑
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-4 pr-14">
             <div>
-              <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ACTIVE TRADE ANCHOR</div>
-              <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ENTRY CONFIRMATION / LIMIT PLACEMENT</div>
+              <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
               <div className="mt-1 text-sm text-zinc-400">Starting Level: {startingLevel || "None selected"} • Top 3 within 5 pts: {report.topWithin5}/3 • Far levels: {report.farCount}</div>
+              {selectedTrade?.clusterWidth !== undefined && (
+                <div className="mt-2 rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-300">
+                  <b className="text-[#ffcc19]">Cluster center:</b> {fmtPrice(selectedTrade.entry)} •
+                  <b className="ml-2 text-[#ffcc19]">Range:</b> {fmtPrice(selectedTrade.clusterLow)}–{fmtPrice(selectedTrade.clusterHigh)} •
+                  <b className="ml-2 text-[#ffcc19]">Width:</b> {fmt(selectedTrade.clusterWidth)} pts
+                  <div className="mt-1 text-zinc-500">
+                    VP confirmation: {selectedVpEvidence.length} source(s){selectedPocEvidence.length ? ` • POC ${selectedPocEvidence.length}` : ""}{selectedLvnEvidence.length ? ` • LVN/crater ${selectedLvnEvidence.length}` : ""}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="grid gap-2 text-sm text-zinc-300 md:grid-cols-3">
               {recommendations.map((r) => (
-                <div key={r.stop} className="rounded-xl border border-zinc-800 bg-[#090909] p-3">
-                  <div className="font-black text-[#ffcc19]">{r.stop}pt Stop</div>
+                <div key={r.stop} className={`rounded-xl border bg-[#090909] p-3 ${r.valid === false ? "border-zinc-700 opacity-70" : "border-zinc-800"}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-black text-[#ffcc19]">{r.stop}pt Stop</div>
+                    <div className={`rounded-full px-2 py-1 text-[10px] font-black ${r.valid === false ? "bg-zinc-700 text-zinc-300" : "bg-[#00d27a] text-black"}`}>{r.confidence}</div>
+                  </div>
                   <div>Limit: {Number(r.limit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
                   <div>Stop: {Number(r.stopArea).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+                  {r.note && <div className="mt-1 text-[11px] text-zinc-500">{r.note}</div>}
                 </div>
               ))}
             </div>
@@ -2538,7 +2565,9 @@ function LevelCard({ anchor, selectedTrade, onSelect }) {
         <div className="mt-2 grid grid-cols-3 gap-1 text-[10px] text-zinc-300">
           {anchor.stopPlans.map((plan) => (
             <div key={plan.stop} className={`rounded border px-2 py-1 ${plan.valid ? "border-[#00d27a]" : "border-zinc-700 text-zinc-500"}`}>
-              {plan.stop}pt<br />{plan.valid ? "OK" : "Too tight"}
+              <div className="font-black">{plan.stop}pt</div>
+              <div>{plan.valid ? "OK" : "Too tight"}</div>
+              <div className="mt-1 text-[9px]">L {fmtPrice(plan.limit)}</div>
             </div>
           ))}
         </div>
@@ -2615,7 +2644,20 @@ function Conf({ title, base, active, onActive, sub, children }) {
 
 function Rec({ r }) {
   const isInvalid = r.valid === false;
-  return <div className={`rounded-2xl border bg-[#090909] p-4 ${isInvalid ? "border-zinc-700 opacity-70" : "border-zinc-800"}`}><div className="flex items-center justify-between"><div className="text-lg font-black text-[#ffcc19]">{r.stop}pt Stop</div><div className={`rounded-full px-3 py-1 text-xs font-black ${isInvalid ? "bg-zinc-700 text-zinc-300" : "bg-[#00d27a] text-black"}`}>{r.confidence}</div></div><div className="mt-3 grid grid-cols-2 gap-3"><Small label="Limit" value={fmt(r.limit)} /><Small label="Stop" value={fmt(r.stopArea)} /></div><p className="mt-3 text-sm text-zinc-400">Based on: {r.match}</p>{r.note && <p className="mt-1 text-xs text-zinc-500">{r.note}</p>}</div>;
+  return (
+    <div className={`rounded-2xl border bg-[#090909] p-4 ${isInvalid ? "border-zinc-700 opacity-70" : "border-zinc-800"}`}>
+      <div className="flex items-center justify-between">
+        <div className="text-lg font-black text-[#ffcc19]">{r.stop}pt Stop</div>
+        <div className={`rounded-full px-3 py-1 text-xs font-black ${isInvalid ? "bg-zinc-700 text-zinc-300" : "bg-[#00d27a] text-black"}`}>{r.confidence}</div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <Small label="Limit / Entry" value={fmt(r.limit)} />
+        <Small label="Stop Area" value={fmt(r.stopArea)} />
+      </div>
+      <p className="mt-3 text-sm text-zinc-400">Based on: {r.match}</p>
+      {r.note && <p className="mt-1 text-xs text-zinc-500">{r.note}</p>}
+    </div>
+  );
 }
 
 function Small({ label, value }) {
