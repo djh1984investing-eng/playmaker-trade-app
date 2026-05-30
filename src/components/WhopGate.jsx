@@ -7,23 +7,9 @@ export default function WhopGate({ children }) {
   useEffect(() => {
     const checkAccess = async () => {
       try {
-        const params = new URLSearchParams(window.location.search);
-        const token =
-          window?.Whop?.userToken ||
-          params.get("access_token") ||
-          params.get("token");
-
-        if (!token) {
-          setStatus("denied");
-          setReason("Missing Whop token. Open Playmaker from inside Whop.");
-          return;
-        }
-
         const res = await fetch("/api/check-whop-access", {
           method: "GET",
-          headers: {
-            "x-whop-user-token": token,
-          },
+          credentials: "include",
         });
 
         const data = await res.json();
@@ -64,7 +50,7 @@ export default function WhopGate({ children }) {
           </div>
           <p className="mt-3 text-zinc-300">{reason}</p>
           <p className="mt-3 text-sm text-zinc-500">
-            If you already purchased, open the app from your Whop dashboard.
+            Open Playmaker from inside your Whop dashboard.
           </p>
         </div>
       </div>
