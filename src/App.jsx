@@ -3,6 +3,12 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
+const TICK_SIZE = 0.25;
+const roundToTick = (price) => {
+  const parsed = Number(price);
+  if (!Number.isFinite(parsed)) return price;
+  return Math.round(parsed / TICK_SIZE) * TICK_SIZE;
+};
 const OWNER_EMAILS = ["djh1984investing@gmail.com", "djharrison", "durrell", "djh1984investing-eng"];
 const isOwnerUser = (user) => {
   const text = String(user?.email || user?.id || "").toLowerCase();
@@ -523,18 +529,22 @@ useEffect(() => {
   const fetchAiSignals = async () => {
     setAiLoading(true);
     setAiFetchMessage("");
+
+    // Pull both TradingView webhook rows and older DJH rows.
+    // The scanner must use delivered indicator levels, not only manual weekly/crater inputs.
     const { data, error } = await supabase
       .from("playmaker_signals")
       .select("*")
-      .eq("user_id", "djh1984investing-eng")
-      .order("created_at", { ascending: false });
+      .in("user_id", ["tradingview", "djh1984investing-eng"])
+      .order("created_at", { ascending: false })
+      .limit(750);
 
     if (error) {
       console.error("AI signal fetch error:", error);
       setAiFetchMessage("AI fetch failed. Check Supabase table/settings.");
     } else {
       setAiSignals(data || []);
-      setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} AI signals.` : "No AI signals found yet.");
+      setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} TradingView/AI signals.` : "No AI signals found yet.");
     }
     setAiLoading(false);
   };
@@ -787,6 +797,10 @@ useEffect(() => {
 
   const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
+  // Scanner input should include all fetched TradingView level rows.
+  // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
+  const scannerAiSignals = aiSignals;
+
 
   const getSignalPayload = (signal) => ({
     ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}),
@@ -1000,12 +1014,13 @@ useEffect(() => {
     return [7, 10, 15].map((stop) => {
       const needed = precisionWidth / 2 + buffer;
       const valid = stop >= needed;
-      const limit = stop <= 7
+      const rawLimit = stop <= 7
         ? entryCore
         : stop <= 10
           ? (entryCore * 0.75 + zoneCenter * 0.25)
           : protectiveEntry;
-      const stopArea = isShort ? limit + stop : limit - stop;
+      const limit = roundToTick(rawLimit);
+      const stopArea = roundToTick(isShort ? limit + stop : limit - stop);
       return {
         stop,
         limit,
@@ -1226,7 +1241,7 @@ useEffect(() => {
   };
 
   const rankedAiLimitZones = useMemo(() => {
-    const rawEvidence = unfilledAiSignals.flatMap(buildLevelEvidenceCandidates);
+    const rawEvidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
     const seedLevels = [
       ...weeklyLevels.map((level) => ({ price: Number(level.price), direction: "Both", label: `Weekly ${level.name || "level"}`, sourceType: "Weekly Level", evidenceScore: 24, evidenceClass: "pillar", session: "WEEKLY", sourceId: `weekly-${level.id}`, created_at: level.created_at, payload: level, signalName: "Weekly Level", triggerPrice: null, levelKey: getLevelKey(level.price) })).filter((item) => Number.isFinite(item.price) && item.price > 0),
       ...craterBoxes.flatMap((box) => {
@@ -1316,7 +1331,7 @@ useEffect(() => {
       const clusterWidth = Math.max(0, clusterHigh - clusterLow);
       const zoneCenter = (clusterHigh + clusterLow) / 2;
       const entryStack = findBestEntryStack(zone.evidence, zoneCenter);
-      const clusterCenter = entryStack.center;
+      const clusterCenter = roundToTick(entryStack.center);
       const tight5Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 2.5).length;
       const tight10Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 5).length;
       const tight20Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 10).length;
@@ -1337,7 +1352,7 @@ useEffect(() => {
         hasOnlyManualPillars ? "GATED: manual weekly/crater only — needs PlayMaker, STDV, OTE, VP, or HTF structure before A/A+" : null,
         sourceCount < 3 ? `GATED: only ${sourceCount} source(s) — needs 3+ for A/A+` : null,
         familyCount < 3 ? `GATED: only ${familyCount} source family/families — needs broader confirmation` : null,
-        entryStack.count ? `Entry stack center ${fmtPrice(entryStack.center)} from ${entryStack.count} strongest confluence source(s)` : null,
+        entryStack.count ? `Entry stack center ${fmtPrice(clusterCenter)} from ${entryStack.count} strongest confluence source(s)` : null,
         minorDeviation && !majorDeviation ? "Prior/minor deviation support" : null,
         hasDailyStdv ? "Daily level is treated as a reaction zone; precision still comes from nearby 1H/4H/5m/15m sources." : null,
         `Cluster ${fmt(clusterLow)}–${fmt(clusterHigh)} / width ${fmt(clusterWidth)} pts`,
@@ -1348,7 +1363,7 @@ useEffect(() => {
       const createdTimes = sortedEvidence.map((item) => item.created_at).filter(Boolean).map((value) => new Date(value).getTime()).filter(Number.isFinite);
       const createdAt = createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : zone.created_at;
       const updatedAt = createdTimes.length ? new Date(Math.max(...createdTimes)).toISOString() : zone.created_at;
-      return { ...zone, precisionOnly, id: `level-${Math.round(clusterCenter)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} cluster ${fmtPrice(clusterCenter)}`, sourceType: "Persistent Level Stack", price: clusterCenter, clusterCenter, clusterLow, clusterHigh, clusterWidth, clusterPrices, tight5Count, tight10Count, tight20Count, stopPlans, score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, evidence: sortedEvidence, sourceCount, created_at: createdAt, updated_at: updatedAt, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked cluster ${fmtPrice(clusterCenter)}`, payload: { price: clusterCenter, cluster_center: clusterCenter, zone_center: zoneCenter, entry_stack_center: entryStack.center, entry_stack_low: entryStack.low, entry_stack_high: entryStack.high, entry_stack_width: entryStack.width, entry_stack_count: entryStack.count, entry_stack_labels: entryStack.labels, cluster_low: clusterLow, cluster_high: clusterHigh, cluster_width: clusterWidth, stop_plans: stopPlans, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: sortedEvidence.map((item) => ({ label: item.label, price: item.price, sourceType: item.sourceType, score: item.evidenceScore, created_at: item.created_at })) } };
+      return { ...zone, precisionOnly, id: `level-${Math.round(clusterCenter)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} cluster ${fmtPrice(clusterCenter)}`, sourceType: "Persistent Level Stack", price: clusterCenter, clusterCenter, clusterLow, clusterHigh, clusterWidth, clusterPrices, tight5Count, tight10Count, tight20Count, stopPlans, score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, evidence: sortedEvidence, sourceCount, created_at: createdAt, updated_at: updatedAt, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked cluster ${fmtPrice(clusterCenter)}`, payload: { price: clusterCenter, cluster_center: clusterCenter, zone_center: zoneCenter, entry_stack_center: clusterCenter, entry_stack_low: entryStack.low, entry_stack_high: entryStack.high, entry_stack_width: entryStack.width, entry_stack_count: entryStack.count, entry_stack_labels: entryStack.labels, cluster_low: clusterLow, cluster_high: clusterHigh, cluster_width: clusterWidth, stop_plans: stopPlans, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: sortedEvidence.map((item) => ({ label: item.label, price: item.price, sourceType: item.sourceType, score: item.evidenceScore, created_at: item.created_at })) } };
     }).filter((zone) => zone.score >= 55 && !zone.precisionOnly).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
 
     const selected = [];
@@ -1364,10 +1379,10 @@ useEffect(() => {
       if (selected.length >= 10) break;
     }
     return selected;
-  }, [unfilledAiSignals, weeklyLevels, craterBoxes]);
+  }, [scannerAiSignals, weeklyLevels, craterBoxes]);
 
   const feedAudit = useMemo(() => {
-    const evidence = unfilledAiSignals.flatMap(buildLevelEvidenceCandidates);
+    const evidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
     const count = (test) => evidence.filter(test).length;
     return [
       { name: "PlayMaker", count: count((e) => e.sourceType === "PlayMaker Confluence") },
@@ -1381,7 +1396,7 @@ useEffect(() => {
       { name: "Weekly", count: weeklyLevels.length },
       { name: "Manual Craters", count: craterBoxes.length }
     ];
-  }, [unfilledAiSignals, weeklyLevels, craterBoxes]);
+  }, [scannerAiSignals, weeklyLevels, craterBoxes]);
 
   const report = useMemo(() => {
     const rows = [];
