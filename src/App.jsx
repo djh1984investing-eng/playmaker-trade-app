@@ -3,6 +3,7 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
+const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
 const TICK_SIZE = 0.25;
 const roundToTick = (price) => {
   const parsed = Number(price);
@@ -418,6 +419,68 @@ useEffect(() => {
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
 
   const ownerMode = isOwnerUser(user);
+  const [accessStatus, setAccessStatus] = useState("checking");
+  const [accessMessage, setAccessMessage] = useState("");
+
+  useEffect(() => {
+    const checkPaidAccess = async () => {
+      if (!user) {
+        setAccessStatus("signed_out");
+        setAccessMessage("");
+        return;
+      }
+
+      if (ownerMode) {
+        setAccessStatus("allowed");
+        setAccessMessage("Owner access active.");
+        return;
+      }
+
+      setAccessStatus("checking");
+      setAccessMessage("Checking Playmaker access...");
+
+      const userEmail = String(user.email || "").toLowerCase();
+
+      const { data: idRow, error: idError } = await supabase
+        .from("playmaker_access")
+        .select("id, active, expires_at")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      let row = idRow || null;
+      let error = idError || null;
+
+      if (!row && userEmail && !idError) {
+        const { data: emailRow, error: emailError } = await supabase
+          .from("playmaker_access")
+          .select("id, active, expires_at")
+          .eq("email", userEmail)
+          .maybeSingle();
+        row = emailRow || null;
+        error = emailError || null;
+      }
+
+      if (error) {
+        console.error("Playmaker access check error:", error);
+        setAccessStatus("blocked");
+        setAccessMessage("Access check failed. Purchase access or contact support.");
+        return;
+      }
+
+      const expiresAt = row?.expires_at ? new Date(row.expires_at).getTime() : null;
+      const isExpired = expiresAt && expiresAt < Date.now();
+
+      if (row?.active && !isExpired) {
+        setAccessStatus("allowed");
+        setAccessMessage("Access active.");
+      } else {
+        setAccessStatus("blocked");
+        setAccessMessage("No active Playmaker subscription found for this login email.");
+      }
+    };
+
+    checkPaidAccess();
+  }, [user, ownerMode]);
 
   useEffect(() => {
     try {
@@ -2357,11 +2420,67 @@ const exportJournalCSV = () => {
           {authMessage}
         </p>
 
+        <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
+          <div className="font-black text-[#ffcc19]">Need access?</div>
+          <p className="mt-1">Purchase Playmaker, then register or log in with the same email.</p>
+          <a
+            href={WHOP_CHECKOUT_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-3 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
+          >
+            Buy Playmaker Access
+          </a>
+        </div>
+
       </div>
     </div>
   );
 }
 
+
+  if (accessStatus === "checking") {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-xl border border-[#ffcc19] bg-[#080808] p-6 text-center">
+          <div className="text-2xl font-black text-[#ffcc19]">Checking Playmaker Access...</div>
+          <p className="mt-3 text-sm text-zinc-400">{accessMessage}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (accessStatus === "blocked") {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-xl border border-[#ffcc19] bg-[#080808] p-6 text-center">
+          <div className="text-3xl font-black text-[#ffcc19]">Playmaker Access Required</div>
+          <p className="mt-3 text-zinc-300">{accessMessage}</p>
+          <p className="mt-2 text-sm text-zinc-500">Use the same email you purchased with on Whop.</p>
+          <a
+            href={WHOP_CHECKOUT_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-5 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
+          >
+            Buy Playmaker Access
+          </a>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-3 w-full rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
+          >
+            I Paid — Check Again
+          </button>
+          <button
+            onClick={signOut}
+            className="mt-3 w-full rounded-xl border border-zinc-700 px-5 py-3 font-black text-zinc-300"
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <WhopGate>
