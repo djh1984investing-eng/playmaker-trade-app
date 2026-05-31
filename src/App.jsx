@@ -1812,8 +1812,15 @@ const exportJournalCSV = () => {
         .single();
 
       if (error) {
-        console.error("Supabase save error:", error);
-        alert("Trade saved locally, but database save failed.");
+        console.error("SUPABASE FULL SAVE ERROR", error);
+        alert(
+          `Database save failed
+
+Message: ${error?.message || ""}
+Details: ${error?.details || ""}
+Hint: ${error?.hint || ""}
+Code: ${error?.code || ""}`
+        );
       } else if (data?.id) {
         savedItem = {
           ...item,
