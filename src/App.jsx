@@ -2388,7 +2388,7 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {ownerMode && tab === "aiSignals" && (
+        {tab === "trade" && (
           <>
         <div className="mt-7 grid gap-5 md:grid-cols-5">
           <Dash label="Confluences" value={report.confluences} />
@@ -2492,11 +2492,10 @@ const exportJournalCSV = () => {
         )}
 
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
-          <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
-            <Tab id="settings" tab={tab} setTab={setTab}>Settings</Tab>
-            {ownerMode && <Tab id="aiSignals" tab={tab} setTab={setTab}>AI Signals</Tab>}
+            {ownerMode && <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>}
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
@@ -2620,7 +2619,7 @@ const exportJournalCSV = () => {
           </div>
         )}
 
-        {tab === "settings" && (
+        {ownerMode && tab === "settings" && (
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
             <Card>
               <Title>AI Pillar Zones</Title>
