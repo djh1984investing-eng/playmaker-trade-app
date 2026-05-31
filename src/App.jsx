@@ -3,7 +3,6 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
-const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
 const TICK_SIZE = 0.25;
 const roundToTick = (price) => {
   const parsed = Number(price);
@@ -340,8 +339,6 @@ const getDefaultForm = () => ({
     maxMove: "",
     maxDrawdown: "",
     profitLoss: "",
-    discountPoints: "",
-    maxDiscountPoints: "",
     notes: "",
     tradeImages: []
   });
@@ -419,68 +416,6 @@ useEffect(() => {
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
 
   const ownerMode = isOwnerUser(user);
-  const [accessStatus, setAccessStatus] = useState("checking");
-  const [accessMessage, setAccessMessage] = useState("");
-
-  useEffect(() => {
-    const checkPaidAccess = async () => {
-      if (!user) {
-        setAccessStatus("signed_out");
-        setAccessMessage("");
-        return;
-      }
-
-      if (ownerMode) {
-        setAccessStatus("allowed");
-        setAccessMessage("Owner access active.");
-        return;
-      }
-
-      setAccessStatus("checking");
-      setAccessMessage("Checking Playmaker access...");
-
-      const userEmail = String(user.email || "").toLowerCase();
-
-      const { data: idRow, error: idError } = await supabase
-        .from("playmaker_access")
-        .select("id, active, expires_at")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      let row = idRow || null;
-      let error = idError || null;
-
-      if (!row && userEmail && !idError) {
-        const { data: emailRow, error: emailError } = await supabase
-          .from("playmaker_access")
-          .select("id, active, expires_at")
-          .eq("email", userEmail)
-          .maybeSingle();
-        row = emailRow || null;
-        error = emailError || null;
-      }
-
-      if (error) {
-        console.error("Playmaker access check error:", error);
-        setAccessStatus("blocked");
-        setAccessMessage("Access check failed. Purchase access or contact support.");
-        return;
-      }
-
-      const expiresAt = row?.expires_at ? new Date(row.expires_at).getTime() : null;
-      const isExpired = expiresAt && expiresAt < Date.now();
-
-      if (row?.active && !isExpired) {
-        setAccessStatus("allowed");
-        setAccessMessage("Access active.");
-      } else {
-        setAccessStatus("blocked");
-        setAccessMessage("No active Playmaker subscription found for this login email.");
-      }
-    };
-
-    checkPaidAccess();
-  }, [user, ownerMode]);
 
   useEffect(() => {
     try {
@@ -636,8 +571,6 @@ useEffect(() => {
           maxMove: row.max_move || "",
           maxDrawdown: row.max_drawdown || "",
           profitLoss: row.profit_loss || "",
-          discountPoints: "",
-          maxDiscountPoints: "",
           notes: row.notes || "",
           tradeImages: row.screenshots || [],
           top: Array.isArray(row.confluences) ? row.confluences.map((r) => r.name).join(", ") : "",
@@ -864,9 +797,79 @@ useEffect(() => {
 
   const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
-  // Scanner input should include all fetched TradingView level rows.
-  // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
-  const scannerAiSignals = aiSignals;
+  // Volume-profile rows can arrive every bar from TradingView.
+  // Keep the raw rows in Supabase, but only let one same-zone VP row feed the scanner
+  // during the cooldown window. This prevents 5m/15m LVN/POC spam from inflating confluence counts.
+  const volumeProfileDedupePoints = 5;
+  const volumeProfileCooldownMs = 30 * 60 * 1000;
+
+  const isVolumeProfileSignal = (signal) => {
+    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+    const text = String(firstDefined(payload.signal, payload.setup, payload.source, signal.signal, "") || "").toUpperCase();
+    return text.includes("VOLUME_PROFILE_LEVELS") || text.includes("VOLUME PROFILE") || text.includes("PLAYMAKER_VOLUME_PROFILE");
+  };
+
+  const volumeProfilePricesForKey = (signal) => {
+    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+    return [
+      firstDefined(payload.poc, payload.point_of_control, payload.vp_poc, payload.volume_poc),
+      firstDefined(payload.vah, payload.value_area_high, payload.va_high),
+      firstDefined(payload.val, payload.value_area_low, payload.va_low),
+      ...arrayFromMaybe(payload.lvn_levels),
+      ...arrayFromMaybe(payload.lvns),
+      ...arrayFromMaybe(payload.low_volume_nodes),
+      ...arrayFromMaybe(payload.low_volume_node),
+      ...arrayFromMaybe(payload.crater_levels),
+      ...arrayFromMaybe(payload.craters),
+      ...arrayFromMaybe(payload.hvn_levels),
+      ...arrayFromMaybe(payload.hvns),
+      ...arrayFromMaybe(payload.high_volume_nodes),
+      ...arrayFromMaybe(payload.high_volume_node)
+    ]
+      .map(parsePrice)
+      .filter((price) => price !== null && price > 0)
+      .map((price) => Math.round(price / volumeProfileDedupePoints) * volumeProfileDedupePoints)
+      .sort((a, b) => a - b);
+  };
+
+  const volumeProfileDedupeKey = (signal) => {
+    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+    const tfRaw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, payload.signal, signal.signal, "") || "").toUpperCase();
+    const tf = tfRaw.includes("15") ? "15m" : tfRaw.includes("5") ? "5m" : tfRaw.includes("60") || tfRaw.includes("1H") ? "1H" : tfRaw.includes("240") || tfRaw.includes("4H") ? "4H" : tfRaw || "GLOBAL";
+    const prices = volumeProfilePricesForKey(signal);
+    if (!prices.length) return `VP|${tf}|${signal.id || payload.id || payload.created_at || signal.created_at || "unknown"}`;
+    return `VP|${tf}|${prices.join("|")}`;
+  };
+
+  const scannerAiSignals = useMemo(() => {
+    const keptVolumeProfiles = new Map();
+    const kept = [];
+
+    [...aiSignals]
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .forEach((signal) => {
+        if (!isVolumeProfileSignal(signal)) {
+          kept.push(signal);
+          return;
+        }
+
+        const key = volumeProfileDedupeKey(signal);
+        const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+        const rawTime = signal.created_at || payload.created_at || payload.bar_time || payload.time || Date.now();
+        const parsedTime = typeof rawTime === "number" ? rawTime : new Date(rawTime).getTime();
+        const timeMs = Number.isFinite(parsedTime) ? parsedTime : Date.now();
+        const priorMs = keptVolumeProfiles.get(key);
+
+        if (priorMs && Math.abs(priorMs - timeMs) < volumeProfileCooldownMs) {
+          return;
+        }
+
+        keptVolumeProfiles.set(key, timeMs);
+        kept.push(signal);
+      });
+
+    return kept;
+  }, [aiSignals]);
 
 
   const getSignalPayload = (signal) => ({
@@ -1654,21 +1657,6 @@ useEffect(() => {
     return { score, wins, losses, be, total: closed.length };
   }, [journal]);
 
-  const journalStats = useMemo(() => {
-    const closed = journal.filter((j) => !isOpenOrder(j));
-    const wins = closed.filter((j) => j.result === "Win").length;
-    const losses = closed.filter((j) => j.result === "Loss").length;
-    const be = closed.filter((j) => j.result === "BE").length;
-    const unfilled = journal.filter((j) => isOpenOrder(j)).length;
-    const totalPL = closed.reduce((sum, j) => sum + n(j.profitLoss), 0);
-    const avgPL = closed.length ? totalPL / closed.length : 0;
-    const avgMove = closed.length ? closed.reduce((sum, j) => sum + n(j.maxMove), 0) / closed.length : 0;
-    const avgDrawdown = closed.length ? closed.reduce((sum, j) => sum + n(j.maxDrawdown), 0) / closed.length : 0;
-    const avgDiscount = journal.length ? journal.reduce((sum, j) => sum + n(j.discountPoints), 0) / journal.length : 0;
-    const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-    return { total: journal.length, closed: closed.length, wins, losses, be, unfilled, winRate, totalPL, avgPL, avgMove, avgDrawdown, avgDiscount };
-  }, [journal]);
-
   const tips = useMemo(() => {
     const t = [];
     if (report.coreBonus > 0) t.push("Core setup is active: Previous Week Level + LVN + PlayMaker stack is your strongest base.");
@@ -1707,8 +1695,6 @@ const exportJournalCSV = () => {
     "200+ Move",
     "Max Drawdown",
     "Profit/Loss",
-    "Discount Points",
-    "Max Discount Points",
     "Notes"
   ];
 
@@ -1723,8 +1709,6 @@ const exportJournalCSV = () => {
     n(j.maxMove) >= 200 ? "Yes" : "No",
     j.maxDrawdown || "",
     j.profitLoss || "",
-    j.discountPoints || "",
-    j.maxDiscountPoints || "",
    JSON.stringify(j.notes || "")
   ]);
 
@@ -1783,17 +1767,10 @@ const exportJournalCSV = () => {
     const sourceType = extra.sourceType || selectedTrade?.sourceType || "Manual Order";
     const signalName = extra.signalName || selectedTrade?.signalName || selectedTrade?.signal || "";
     const baseNotes = form.notes || "";
-    const discountText = [
-      form.discountPoints ? `Discount: ${form.discountPoints} pts` : "",
-      form.maxDiscountPoints ? `Max Discount: ${form.maxDiscountPoints} pts` : ""
-    ].filter(Boolean).join(" • ");
-    const rawNotes =
+    const notes =
       sourceType === "AI Signal" && signalName && !baseNotes.includes(`AI Signal: ${signalName}`)
         ? `AI Signal: ${signalName}${baseNotes ? ` — ${baseNotes}` : ""}`
         : baseNotes;
-    const notes = discountText && !String(rawNotes).includes("Discount:")
-      ? `${rawNotes ? `${rawNotes} — ` : ""}${discountText}`
-      : rawNotes;
 
     const isAiAnchor = sourceType === "AI Signal";
     const aiEvidence = selectedTrade?.evidence || selectedTrade?.rawSignal?.evidence || form.evidence || [];
@@ -1813,8 +1790,6 @@ const exportJournalCSV = () => {
       maxMove: form.maxMove,
       maxDrawdown: form.maxDrawdown,
       profitLoss: form.profitLoss,
-      discountPoints: form.discountPoints,
-      maxDiscountPoints: form.maxDiscountPoints,
       notes,
       tradeImages: form.tradeImages,
       top: isAiAnchor ? aiTop : report.active.slice(0, 4).map((r) => r.name).join(", "),
@@ -1871,8 +1846,6 @@ const exportJournalCSV = () => {
     next.maxMove = "";
     next.maxDrawdown = "";
     next.profitLoss = "";
-    next.discountPoints = "";
-    next.maxDiscountPoints = "";
     next.notes = "";
     next.tradeImages = [];
 
@@ -2001,8 +1974,6 @@ const exportJournalCSV = () => {
         maxMove: item.maxMove || "",
         maxDrawdown: item.maxDrawdown || "",
         profitLoss: item.profitLoss || "",
-        discountPoints: item.discountPoints || "",
-        maxDiscountPoints: item.maxDiscountPoints || "",
         notes: item.notes || "",
         tradeImages: item.tradeImages || []
       });
@@ -2015,8 +1986,6 @@ const exportJournalCSV = () => {
         maxMove: item.maxMove || "",
         maxDrawdown: item.maxDrawdown || "",
         profitLoss: item.profitLoss || "",
-        discountPoints: item.discountPoints || "",
-        maxDiscountPoints: item.maxDiscountPoints || "",
         notes: item.notes || "",
         tradeImages: item.tradeImages || []
       }));
@@ -2420,67 +2389,11 @@ const exportJournalCSV = () => {
           {authMessage}
         </p>
 
-        <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
-          <div className="font-black text-[#ffcc19]">Need access?</div>
-          <p className="mt-1">Purchase Playmaker, then register or log in with the same email.</p>
-          <a
-            href={WHOP_CHECKOUT_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
-          >
-            Buy Playmaker Access
-          </a>
-        </div>
-
       </div>
     </div>
   );
 }
 
-
-  if (accessStatus === "checking") {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-xl border border-[#ffcc19] bg-[#080808] p-6 text-center">
-          <div className="text-2xl font-black text-[#ffcc19]">Checking Playmaker Access...</div>
-          <p className="mt-3 text-sm text-zinc-400">{accessMessage}</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (accessStatus === "blocked") {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
-        <div className="w-full max-w-md rounded-xl border border-[#ffcc19] bg-[#080808] p-6 text-center">
-          <div className="text-3xl font-black text-[#ffcc19]">Playmaker Access Required</div>
-          <p className="mt-3 text-zinc-300">{accessMessage}</p>
-          <p className="mt-2 text-sm text-zinc-500">Use the same email you purchased with on Whop.</p>
-          <a
-            href={WHOP_CHECKOUT_URL}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-5 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
-          >
-            Buy Playmaker Access
-          </a>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-3 w-full rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
-          >
-            I Paid — Check Again
-          </button>
-          <button
-            onClick={signOut}
-            className="mt-3 w-full rounded-xl border border-zinc-700 px-5 py-3 font-black text-zinc-300"
-          >
-            Sign Out
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <WhopGate>
@@ -2507,8 +2420,6 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {tab === "trade" && (
-          <>
         <div className="mt-7 grid gap-5 md:grid-cols-5">
           <Dash label="Confluences" value={report.confluences} />
           <Dash label="Within 5 Points" value={report.within5} />
@@ -2607,14 +2518,11 @@ const exportJournalCSV = () => {
           </div>
         )}
 
-                  </>
-        )}
-
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
           <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
-            {ownerMode && <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>}
+            <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
@@ -2738,7 +2646,7 @@ const exportJournalCSV = () => {
           </div>
         )}
 
-        {ownerMode && tab === "settings" && (
+        {tab === "settings" && (
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
             <Card>
               <Title>AI Pillar Zones</Title>
@@ -2870,7 +2778,6 @@ const exportJournalCSV = () => {
               </div>
             </Card>
 
-            {ownerMode && (
             <Card className="lg:col-span-2">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <Title>AI Signal Memory</Title>
@@ -2891,7 +2798,6 @@ const exportJournalCSV = () => {
                 ))}
               </div>
             </Card>
-            )}
           </div>
         )}
 
@@ -2900,7 +2806,6 @@ const exportJournalCSV = () => {
         {tab === "journal" && (
           <Journal
             journal={journal}
-            journalStats={journalStats}
             saveTrade={saveTrade}
             editTrade={editTrade}
             exportJournalCSV={exportJournalCSV}
@@ -3111,111 +3016,8 @@ function Breakdown({ report, recommendations, tips }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-4"><Small label="Zone Score" value={`${report.zoneScore}/100`} /><Small label="Precision Grade Score" value={`${report.score}/100`} /><Small label="Top 3 Within 5" value={`${report.topWithin5}/3`} /><Small label="Far Levels 8+" value={report.farCount} /></div><div className="mt-4 rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-sm text-zinc-300">Raw points still count the reaction zone. The grade is capped by entry precision: top-weighted confluences need to align within 3–5 points for A/A+.</div><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
 }
 
-function Journal({ journal, journalStats, saveTrade, editTrade, exportJournalCSV, form, set, editingId, handleImageUpload }) {
-  const stats = journalStats || { total: 0, closed: 0, wins: 0, losses: 0, be: 0, unfilled: 0, winRate: 0, totalPL: 0, avgPL: 0, avgMove: 0, avgDrawdown: 0, avgDiscount: 0 };
-
-  return (
-    <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]">
-      <Card>
-        <Title>{editingId ? "Edit Report" : "Report Result"}</Title>
-        <div className="mt-5 grid gap-4">
-          <Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} />
-          <Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} />
-          <Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} />
-          <Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} />
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Discount Points" value={form.discountPoints || ""} onChange={(v) => set("discountPoints", v)} />
-            <Field label="Max Discount Points" value={form.maxDiscountPoints || ""} onChange={(v) => set("maxDiscountPoints", v)} />
-          </div>
-          <label>
-            <span className="mb-2 block text-sm text-zinc-300">Notes</span>
-            <textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" />
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span>
-            <input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" />
-          </label>
-          {form.tradeImages?.length > 0 && (
-            <div className="grid grid-cols-2 gap-3">
-              {form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}
-            </div>
-          )}
-          <button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">
-            {editingId || form.result !== "Unfilled" ? "Save Result" : "Save To Journal"}
-          </button>
-        </div>
-      </Card>
-
-      <Card>
-        <Title>Journal Dashboard</Title>
-        <div className="mt-4 grid gap-3 md:grid-cols-4">
-          <Small label="Total Trades" value={stats.total} />
-          <Small label="Closed" value={stats.closed} />
-          <Small label="Win %" value={`${stats.winRate}%`} />
-          <Small label="Total P/L" value={fmt(stats.totalPL)} />
-          <Small label="Wins" value={stats.wins} />
-          <Small label="Losses" value={stats.losses} />
-          <Small label="BE" value={stats.be} />
-          <Small label="Unfilled" value={stats.unfilled} />
-          <Small label="Avg P/L" value={fmt(stats.avgPL)} />
-          <Small label="Avg Max Move" value={fmt(stats.avgMove)} />
-          <Small label="Avg Drawdown" value={fmt(stats.avgDrawdown)} />
-          <Small label="Avg Discount" value={fmt(stats.avgDiscount)} />
-        </div>
-
-        <div className="mt-5 flex items-center justify-between gap-3">
-          <Title>Journal</Title>
-          <button onClick={exportJournalCSV} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button>
-        </div>
-
-        <div className="mt-5 overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-zinc-400">
-              <tr>
-                <th className="p-3">Date</th>
-                <th>Entry</th>
-                <th>Dir</th>
-                <th>Grade</th>
-                <th>Result</th>
-                <th>Discount</th>
-                <th>Top Confluence</th>
-                <th>P/L</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {journal.map((j) => (
-                <React.Fragment key={j.id}>
-                  <tr className="border-t border-zinc-800">
-                    <td className="p-3">{j.date}</td>
-                    <td>{fmtPrice(j.entry)}</td>
-                    <td>{j.direction}</td>
-                    <td>{j.grade} {j.score}</td>
-                    <td>{j.result}</td>
-                    <td>{j.discountPoints || "--"}</td>
-                    <td>{j.top}</td>
-                    <td>{j.profitLoss}</td>
-                    <td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td>
-                  </tr>
-                  <tr>
-                    <td colSpan="9" className="px-3 pb-5">
-                      {j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}
-                      {j.tradeImages?.length > 0 && (
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                          {j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-          {journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}
-        </div>
-      </Card>
-    </div>
-  );
+function Journal({ journal, saveTrade, editTrade, exportJournalCSV, form, set, editingId, handleImageUpload }) {
+  return <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]"><Card><Title>{editingId ? "Edit Report" : "Report Result"}</Title><div className="mt-5 grid gap-4"><Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} /><Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} /><Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} /><Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} /><label><span className="mb-2 block text-sm text-zinc-300">Notes</span><textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} className="h-28 w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] p-4 text-white outline-none focus:border-[#ffcc19]" /></label><label><span className="mb-2 block text-sm text-zinc-300">Trade Pictures / Screenshots</span><input type="file" multiple accept="image/*" onChange={handleImageUpload} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white" /></label>{form.tradeImages?.length > 0 && <div className="grid grid-cols-2 gap-3">{form.tradeImages.map((img, i) => <img key={i} src={img} alt="trade" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}<button onClick={saveTrade} className="rounded-xl bg-[#ffcc19] py-3 font-black text-black">{editingId || form.result !== "Unfilled" ? "Save Result" : "Save To Journal"}</button></div></Card><Card><Title>Journal</Title><button onClick={exportJournalCSV} className="mt-4 rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button><div className="mt-5 overflow-x-auto"><table className="w-full text-left text-sm"><thead className="text-zinc-400"><tr><th className="p-3">Date</th><th>Dir</th><th>Grade</th><th>Result</th><th>Top Confluence</th><th>P/L</th><th></th></tr></thead><tbody>{journal.map((j) => <React.Fragment key={j.id}><tr className="border-t border-zinc-800"><td className="p-3">{j.date}</td><td>{j.direction}</td><td>{j.grade} {j.score}</td><td>{j.result}</td><td>{j.top}</td><td>{j.profitLoss}</td><td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td></tr><tr><td colSpan="7" className="px-3 pb-5">{j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}{j.tradeImages?.length > 0 && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">{j.tradeImages.map((img, idx) => <img key={idx} src={img} alt="journal" className="h-32 w-full rounded-xl object-cover border border-zinc-800" />)}</div>}</td></tr></React.Fragment>)}</tbody></table>{journal.length === 0 && <div className="p-6 text-zinc-500">No saved trades yet.</div>}</div></Card></div>;
 }
 
 function Behavior({ behavior, journal, learningStats = [] }) {
