@@ -3,6 +3,12 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
+const TICK_SIZE = 0.25;
+const roundToTick = (price) => {
+  const parsed = Number(price);
+  if (!Number.isFinite(parsed)) return price;
+  return Math.round(parsed / TICK_SIZE) * TICK_SIZE;
+};
 
 const startingOptions = [
   "prevWeekLevel",
@@ -1383,8 +1389,8 @@ useEffect(() => {
       const strongest = [...active].sort((a, b) => b.score - a.score)[0];
       const match = ranked[0] || strongest;
       const signedPullback = match ? match.signedPullback : side * (stop * 0.35);
-      const limit = roundToTick(entry + signedPullback);
-      const stopArea = roundToTick(form.direction === "Long" ? limit - stop : limit + stop);
+      const limit = entry + signedPullback;
+      const stopArea = form.direction === "Long" ? limit - stop : limit + stop;
 
       return {
         stop,
@@ -1609,62 +1615,45 @@ const exportJournalCSV = () => {
     setEditingId(null);
   };
 
-  const showDatabaseError = (error, action = "save") => {
-    console.error(`SUPABASE ${action.toUpperCase()} ERROR`, error);
-
-    alert(
-      `Database ${action} failed
-
-Message: ${error?.message || ""}
-Details: ${error?.details || ""}
-Hint: ${error?.hint || ""}
-Code: ${error?.code || ""}`
-    );
-  };
-
   const saveTradeToDatabase = async (item, updateExisting = false) => {
     if (!user) {
       alert("Please log in before saving a trade.");
-      return null;
+      return item;
     }
 
+    let savedItem = item;
+
     if (updateExisting && item.id && selectedTrade?.sourceType !== "AI Signal") {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from("trade_journal")
         .update(tradePayload(item))
         .eq("id", item.id)
-        .eq("user_id", user.id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Supabase update error:", error);
+        alert("Trade updated locally, but database update failed.");
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("trade_journal")
+        .insert([tradePayload(item)])
         .select("id, created_at")
         .single();
 
       if (error) {
-        showDatabaseError(error, "update");
-        return null;
+        console.error("Supabase save error:", error);
+        alert("Trade saved locally, but database save failed.");
+      } else if (data?.id) {
+        savedItem = {
+          ...item,
+          id: data.id,
+          date: data.created_at ? new Date(data.created_at).toLocaleDateString() : item.date
+        };
       }
-
-      return {
-        ...item,
-        id: data?.id || item.id,
-        date: data?.created_at ? new Date(data.created_at).toLocaleDateString() : item.date
-      };
     }
 
-    const { data, error } = await supabase
-      .from("trade_journal")
-      .insert([tradePayload(item)])
-      .select("id, created_at")
-      .single();
-
-    if (error) {
-      showDatabaseError(error, "save");
-      return null;
-    }
-
-    return {
-      ...item,
-      id: data?.id || item.id,
-      date: data?.created_at ? new Date(data.created_at).toLocaleDateString() : item.date
-    };
+    return savedItem;
   };
 
   const saveTradeMemory = async (item) => {
@@ -1702,7 +1691,6 @@ Code: ${error?.code || ""}`
       signalName: selectedTrade?.signalName || selectedTrade?.rawSignal?.signal || ""
     });
     const savedItem = await saveTradeToDatabase(item, false);
-    if (!savedItem) return;
 
     setJournal((j) => {
       const withoutDuplicates = j.filter((x) => !sameTradeAnchor(x, savedItem));
@@ -1718,7 +1706,6 @@ Code: ${error?.code || ""}`
     const item = makeJournalItem(form.result);
     const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
     const savedItem = await saveTradeToDatabase(item, isReportingExisting);
-    if (!savedItem) return;
 
     await saveTradeMemory(savedItem);
 
