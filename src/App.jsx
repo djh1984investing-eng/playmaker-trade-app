@@ -2,14 +2,10 @@ import React, { useMemo, useState, useEffect } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 
-/*
-PLAYMAKER REGRESSION GUARD / TRACKED FIXES
-- Tabs must open as separate pages. AI Signals board stays only on the AI Signals tab.
-- Settings tab remains separate for saved weekly levels and crater boxes.
-- Manual weekly levels and crater boxes must stay in the scanner for each logged-in user.
-- Volume Profile rows are deduped in the app before scanner use; raw Supabase rows are not deleted.
-- Signal notes stay attached to the AI signal/price-zone card.
-*/
+// PLAYMAKER CHANGE GUARD:
+// Keep existing page/tab layout, journal submit/report flow, TradingView signal intake, scanner sources,
+// Whop/access behavior, and manual weekly/crater scanner inputs intact.
+// New patches must be isolated: VP scanner dedupe, price-zone organization display, owner public verification notes.
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 const TICK_SIZE = 0.25;
@@ -423,15 +419,9 @@ useEffect(() => {
   const [verifiedAnchors, setVerifiedAnchors] = useState({});
   const [notificationLog, setNotificationLog] = useState([]);
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
-  const [signalNotes, setSignalNotes] = useState({});
+  const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
   const ownerMode = isOwnerUser(user);
-
-  useEffect(() => {
-    if (!ownerMode && tab === "aiSignals") {
-      setTab("trade");
-    }
-  }, [ownerMode, tab]);
 
   useEffect(() => {
     try {
@@ -446,18 +436,40 @@ useEffect(() => {
     } catch (_err) {}
   }, [verifiedAnchors]);
 
+  // Public owner verification notes: customers can see Mr. DJ Harrison verified notes,
+  // but only owner accounts can create/edit/remove them.
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("playmaker_signal_notes") || "{}");
-      if (saved && typeof saved === "object") setSignalNotes(saved);
-    } catch (_err) {}
-  }, []);
+    const loadOwnerSignalNotes = async () => {
+      const { data, error } = await supabase
+        .from("owner_signal_verifications")
+        .select("*")
+        .eq("verified", true);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem("playmaker_signal_notes", JSON.stringify(signalNotes));
-    } catch (_err) {}
-  }, [signalNotes]);
+      if (error) {
+        // Table may not exist until SQL is run. Do not break the app or signal intake.
+        console.warn("Owner signal verification table not ready:", error.message || error);
+        return;
+      }
+
+      const next = {};
+      (data || []).forEach((row) => {
+        const key = String(row.signal_key || row.signal_id || "");
+        if (!key) return;
+        next[key] = {
+          verified: true,
+          verifiedBy: row.verified_by || "Mr. DJ Harrison",
+          label: `Mr. DJ Harrison Verified ${String(row.direction || "BOTH").toUpperCase()}`,
+          direction: row.direction || "BOTH",
+          verifiedAt: row.verified_at || row.updated_at || row.created_at,
+          ownerNote: row.owner_note || ""
+        };
+      });
+      setOwnerSignalNotes(next);
+      setVerifiedAnchors((prev) => ({ ...prev, ...next }));
+    };
+
+    loadOwnerSignalNotes();
+  }, [user]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -826,9 +838,10 @@ useEffect(() => {
 
   const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
-  // Volume-profile rows can arrive every bar from TradingView.
-  // Keep raw rows in Supabase, but only let a new VP occurrence feed the scanner.
-  // A new occurrence means a new timeframe/type/price-zone, or the cooldown has expired.
+  // Scanner input should include all fetched TradingView level rows.
+  // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
+  // Volume Profile is the exception: TradingView can send the same 5m/15m VP row every bar.
+  // Keep raw VP rows in Supabase, but only let new VP occurrences feed scanner counts.
   const volumeProfileDedupePoints = 5;
   const volumeProfileCooldownMs = 45 * 60 * 1000;
 
@@ -838,32 +851,21 @@ useEffect(() => {
     return text.includes("VOLUME_PROFILE_LEVELS") || text.includes("VOLUME PROFILE") || text.includes("PLAYMAKER_VOLUME_PROFILE");
   };
 
-  const volumeProfileTfForKey = (signal) => {
+  const volumeProfileTypePrices = (signal) => {
     const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const tfRaw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, payload.signal, signal.signal, "") || "").toUpperCase();
-    if (tfRaw.includes("15")) return "15m";
-    if (tfRaw.includes("5")) return "5m";
-    if (tfRaw.includes("60") || tfRaw.includes("1H")) return "1H";
-    if (tfRaw.includes("240") || tfRaw.includes("4H")) return "4H";
-    return tfRaw || "GLOBAL";
-  };
-
-  const volumeProfileOccurrencesForKey = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const tf = volumeProfileTfForKey(signal);
-    const add = (type, values) => arrayFromMaybe(values)
+    const pack = (type, values) => arrayFromMaybe(values)
       .map(parsePrice)
       .filter((price) => price !== null && price > 0)
-      .map((price) => {
-        const zone = Math.round(price / volumeProfileDedupePoints) * volumeProfileDedupePoints;
-        return `${tf}|${type}|${zone}`;
-      });
+      .map((price) => ({
+        type,
+        zone: Math.round(price / volumeProfileDedupePoints) * volumeProfileDedupePoints
+      }));
 
     return [
-      ...add("POC", firstDefined(payload.poc, payload.point_of_control, payload.vp_poc, payload.volume_poc)),
-      ...add("VAH", firstDefined(payload.vah, payload.value_area_high, payload.va_high)),
-      ...add("VAL", firstDefined(payload.val, payload.value_area_low, payload.va_low)),
-      ...add("LVN", [
+      ...pack("POC", firstDefined(payload.poc, payload.point_of_control, payload.vp_poc, payload.volume_poc)),
+      ...pack("VAH", firstDefined(payload.vah, payload.value_area_high, payload.va_high)),
+      ...pack("VAL", firstDefined(payload.val, payload.value_area_low, payload.va_low)),
+      ...pack("LVN", [
         ...arrayFromMaybe(payload.lvn_levels),
         ...arrayFromMaybe(payload.lvns),
         ...arrayFromMaybe(payload.low_volume_nodes),
@@ -871,7 +873,7 @@ useEffect(() => {
         ...arrayFromMaybe(payload.crater_levels),
         ...arrayFromMaybe(payload.craters)
       ]),
-      ...add("HVN", [
+      ...pack("HVN", [
         ...arrayFromMaybe(payload.hvn_levels),
         ...arrayFromMaybe(payload.hvns),
         ...arrayFromMaybe(payload.high_volume_nodes),
@@ -880,8 +882,17 @@ useEffect(() => {
     ];
   };
 
+  const volumeProfileDedupeKeys = (signal) => {
+    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+    const tfRaw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, payload.signal, signal.signal, "") || "").toUpperCase();
+    const tf = tfRaw.includes("15") ? "15m" : tfRaw.includes("5") ? "5m" : tfRaw.includes("60") || tfRaw.includes("1H") ? "1H" : tfRaw.includes("240") || tfRaw.includes("4H") ? "4H" : tfRaw || "GLOBAL";
+    const levels = volumeProfileTypePrices(signal);
+    if (!levels.length) return [`VP|${tf}|UNKNOWN|${signal.id || payload.id || payload.created_at || signal.created_at || "unknown"}`];
+    return levels.map((level) => `VP|${tf}|${level.type}|${level.zone}`);
+  };
+
   const scannerAiSignals = useMemo(() => {
-    const lastSeenByOccurrence = new Map();
+    const keptVolumeProfiles = new Map();
     const kept = [];
 
     [...aiSignals]
@@ -896,27 +907,16 @@ useEffect(() => {
         const rawTime = signal.created_at || payload.created_at || payload.bar_time || payload.time || Date.now();
         const parsedTime = typeof rawTime === "number" ? rawTime : new Date(rawTime).getTime();
         const timeMs = Number.isFinite(parsedTime) ? parsedTime : Date.now();
-        const occurrences = volumeProfileOccurrencesForKey(signal);
 
-        if (!occurrences.length) {
-          const fallbackKey = `VP|${volumeProfileTfForKey(signal)}|${signal.id || payload.id || payload.created_at || signal.created_at || "unknown"}`;
-          const priorMs = lastSeenByOccurrence.get(fallbackKey);
-          if (priorMs && Math.abs(priorMs - timeMs) < volumeProfileCooldownMs) return;
-          lastSeenByOccurrence.set(fallbackKey, timeMs);
-          kept.push(signal);
-          return;
-        }
-
-        // If every VP price/type in this row was already seen recently, it is likely the same bar-by-bar spam.
-        // If at least one POC/VAH/VAL/LVN/HVN zone is new, keep the row because it represents a fresh occurrence.
-        const hasFreshOccurrence = occurrences.some((key) => {
-          const priorMs = lastSeenByOccurrence.get(key);
-          return !priorMs || Math.abs(priorMs - timeMs) >= volumeProfileCooldownMs;
+        const keys = volumeProfileDedupeKeys(signal);
+        const isRepeat = keys.every((key) => {
+          const priorMs = keptVolumeProfiles.get(key);
+          return priorMs && Math.abs(priorMs - timeMs) < volumeProfileCooldownMs;
         });
 
-        if (!hasFreshOccurrence) return;
+        if (isRepeat) return;
 
-        occurrences.forEach((key) => lastSeenByOccurrence.set(key, timeMs));
+        keys.forEach((key) => keptVolumeProfiles.set(key, timeMs));
         kept.push(signal);
       });
 
@@ -2221,31 +2221,60 @@ const exportJournalCSV = () => {
   };
 
   const anchorVerificationKey = (anchor) => String(anchor?.signal_id || anchor?.sourceId || anchor?.id || anchor?.entry || "");
-  const anchorNoteKey = (anchor) => String(anchor?.signal_id || anchor?.sourceId || anchor?.id || anchor?.entry || "");
-  const updateSignalNote = (anchor, note) => {
-    const key = anchorNoteKey(anchor);
-    if (!key) return;
-    setSignalNotes((prev) => ({ ...prev, [key]: note }));
-  };
 
-  const verifyAnchor = (anchor) => {
+  const verifyAnchor = async (anchor, ownerNote = "") => {
     if (!ownerMode || !anchor) return;
     const key = anchorVerificationKey(anchor);
     if (!key) return;
     const direction = String(anchor.direction || "Both").toUpperCase();
+    const verification = {
+      verified: true,
+      verifiedBy: "Mr. DJ Harrison",
+      label: `Mr. DJ Harrison Verified ${direction}`,
+      direction,
+      verifiedAt: new Date().toISOString(),
+      ownerNote: String(ownerNote || "").trim()
+    };
+
     setVerifiedAnchors((prev) => ({
       ...prev,
-      [key]: {
-        verified: true,
-        verifiedBy: "Mr. DJ Harrison",
-        label: `Mr. DJ Harrison Verified ${direction}`,
-        direction,
-        verifiedAt: new Date().toISOString()
-      }
+      [key]: verification
     }));
+    setOwnerSignalNotes((prev) => ({
+      ...prev,
+      [key]: verification
+    }));
+
+    const payload = {
+      signal_key: key,
+      signal_id: String(anchor.signal_id || anchor.sourceId || anchor.id || ""),
+      price: Number(anchor.entry || anchor.price) || null,
+      direction,
+      grade: anchor.grade || null,
+      verified: true,
+      verified_by: "Mr. DJ Harrison",
+      owner_note: verification.ownerNote,
+      payload: {
+        entry: anchor.entry,
+        top: anchor.top,
+        sourceCount: anchor.sourceCount,
+        evidence: anchor.evidence || anchor.rawSignal?.evidence || [],
+        signalName: anchor.signalName || anchor.rawSignal?.signal || ""
+      },
+      verified_at: verification.verifiedAt,
+      updated_at: verification.verifiedAt
+    };
+
+    const { error } = await supabase
+      .from("owner_signal_verifications")
+      .upsert([payload], { onConflict: "signal_key" });
+
+    if (error) {
+      console.warn("Owner verification saved locally only until SQL table is ready:", error.message || error);
+    }
   };
 
-  const removeAnchorVerification = (anchor) => {
+  const removeAnchorVerification = async (anchor) => {
     if (!ownerMode || !anchor) return;
     const key = anchorVerificationKey(anchor);
     setVerifiedAnchors((prev) => {
@@ -2253,6 +2282,19 @@ const exportJournalCSV = () => {
       delete next[key];
       return next;
     });
+    setOwnerSignalNotes((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+
+    if (key) {
+      const { error } = await supabase
+        .from("owner_signal_verifications")
+        .delete()
+        .eq("signal_key", key);
+      if (error) console.warn("Owner verification delete skipped until SQL table is ready:", error.message || error);
+    }
   };
 
   const [manualLetter, manualText] = grade(report.score);
@@ -2299,7 +2341,7 @@ const exportJournalCSV = () => {
       zoneScore: zone.zoneScore || zone.score,
       sourceCount: zone.sourceCount || zone.evidence?.length || 0,
       evidence: zone.evidence || [],
-      verification: verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
+      verification: ownerSignalNotes[String(zone.sourceId || "")] || verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
       result: "Unfilled",
       orderStatus: zone.status,
       pendingOrder: true,
@@ -2478,8 +2520,6 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {ownerMode && tab === "aiSignals" && (
-          <>
         <div className="mt-7 grid gap-5 md:grid-cols-5">
           <Dash label="Confluences" value={report.confluences} />
           <Dash label="Within 5 Points" value={report.within5} />
@@ -2568,25 +2608,21 @@ const exportJournalCSV = () => {
               <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review / Report</button>
             </div>
 
-            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} signalNotes={signalNotes} onUpdateSignalNote={updateSignalNote} />
-            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} signalNotes={signalNotes} onUpdateSignalNote={updateSignalNote} />
-            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} signalNotes={signalNotes} onUpdateSignalNote={updateSignalNote} />
+            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} />
+            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} />
+            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} />
 
             {unfilledOrders.length > 0 && (
-              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} signalNotes={signalNotes} onUpdateSignalNote={updateSignalNote} />
+              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} />
             )}
           </div>
         )}
 
-                  </>
-        )}
-
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
-          <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
-            <Tab id="settings" tab={tab} setTab={setTab}>Settings</Tab>
-            {ownerMode && <Tab id="aiSignals" tab={tab} setTab={setTab}>AI Signals</Tab>}
+            <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
@@ -2885,34 +2921,6 @@ const exportJournalCSV = () => {
   );
 }
 
-function priceZoneLabelForAnchor(anchor, zoneSize = 5) {
-  const price = parsePrice(anchor?.entry || anchor?.price || anchor?.clusterCenter);
-  if (price === null) return "No Price";
-  const center = Math.round(price / zoneSize) * zoneSize;
-  const low = center - zoneSize / 2;
-  const high = center + zoneSize / 2;
-  return `${fmtPrice(low)}–${fmtPrice(high)}`;
-}
-
-function groupAnchorsByPriceZone(items = [], zoneSize = 5) {
-  const groups = items.reduce((acc, item) => {
-    const price = parsePrice(item?.entry || item?.price || item?.clusterCenter);
-    const center = price === null ? Number.POSITIVE_INFINITY : Math.round(price / zoneSize) * zoneSize;
-    const label = price === null ? "No Price" : priceZoneLabelForAnchor(item, zoneSize);
-    const key = price === null ? "No Price" : String(center);
-    if (!acc[key]) acc[key] = { key, center, label, items: [] };
-    acc[key].items.push(item);
-    return acc;
-  }, {});
-
-  return Object.values(groups)
-    .sort((a, b) => a.center - b.center)
-    .map((group) => ({
-      ...group,
-      items: group.items.sort((a, b) => Number(a.entry || a.price || 0) - Number(b.entry || b.price || 0))
-    }));
-}
-
 function sourceGroupName(sourceType = "") {
   const text = String(sourceType);
   if (text.includes("STDV") || text.includes("Deviation")) return "STDV";
@@ -2959,15 +2967,17 @@ function EvidenceList({ evidence = [] }) {
   );
 }
 
-function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, signalNotes = {}, onUpdateSignalNote }) {
+function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify }) {
   const isAi = anchor.sourceType === "AI Signal";
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
   const verification = anchor.verification || verifiedAnchors[verificationKey] || null;
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
-  const noteKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
-  const signalNote = signalNotes[noteKey] || "";
+  const [draftOwnerNote, setDraftOwnerNote] = useState(verification?.ownerNote || "");
+  useEffect(() => {
+    setDraftOwnerNote(verification?.ownerNote || "");
+  }, [verification?.ownerNote, verificationKey]);
   return (
     <div
       onClick={() => onSelect(anchor)}
@@ -3013,22 +3023,26 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
 
       {anchor.top && <div className="mt-2 text-xs text-zinc-500">{anchor.top}</div>}
 
-      {ownerMode && isAi && (
-        <div className="mt-3 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => onVerify?.(anchor)} className="rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black">Verify Setup</button>
-          {verifiedLabel && <button onClick={() => onUnverify?.(anchor)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400">Remove Verify</button>}
+      {isAi && verification?.ownerNote && (
+        <div className="mt-3 rounded-xl border border-[#00d27a] bg-[#001a0f] p-3 text-xs text-[#00d27a]">
+          <div className="font-black">Owner Signal Note</div>
+          <div className="mt-1 text-zinc-100">{verification.ownerNote}</div>
         </div>
       )}
 
-      {isAi && (
-        <div className="mt-3" onClick={(e) => e.stopPropagation()}>
-          <label className="block text-xs font-black uppercase tracking-[0.14em] text-[#ffcc19]">Signal Note</label>
+      {ownerMode && isAi && (
+        <div className="mt-3 space-y-2" onClick={(e) => e.stopPropagation()}>
+          <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Signal Note</div>
           <textarea
-            value={signalNote}
-            onChange={(e) => onUpdateSignalNote?.(anchor, e.target.value)}
+            value={draftOwnerNote}
+            onChange={(e) => setDraftOwnerNote(e.target.value)}
             placeholder="Add why you like it, reject it, or what confirmation you need..."
-            className="mt-2 h-20 w-full rounded-xl border border-zinc-800 bg-black p-3 text-xs text-white outline-none focus:border-[#ffcc19]"
+            className="h-20 w-full rounded-xl border border-zinc-700 bg-black p-3 text-xs text-white outline-none focus:border-[#ffcc19]"
           />
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => onVerify?.(anchor, draftOwnerNote)} className="rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black">Verify Setup + Save Note</button>
+            {verifiedLabel && <button onClick={() => onUnverify?.(anchor)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400">Remove Verify</button>}
+          </div>
         </div>
       )}
 
@@ -3037,28 +3051,17 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   );
 }
 
-function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, signalNotes = {}, onUpdateSignalNote }) {
+function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify }) {
   if (!items.length) return null;
-  const groups = groupAnchorsByPriceZone(items, 5);
   return (
     <div className="mt-5">
       <div className="mb-3">
         <div className="text-lg font-black text-white">{title}</div>
         {subtitle && <div className="text-sm text-zinc-500">{subtitle}</div>}
       </div>
-      <div className="space-y-4">
-        {groups.map((group) => (
-          <div key={group.key} className="rounded-2xl border border-zinc-900 bg-black/40 p-3">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Price Zone {group.label}</div>
-              <div className="rounded-full border border-zinc-800 px-3 py-1 text-[11px] font-black text-zinc-400">{group.items.length} level(s)</div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-3">
-              {group.items.map((anchor) => (
-                <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} signalNotes={signalNotes} onUpdateSignalNote={onUpdateSignalNote} />
-              ))}
-            </div>
-          </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {[...items].sort((a, b) => (Number(a.entry || a.price) || 0) - (Number(b.entry || b.price) || 0)).map((anchor) => (
+          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} />
         ))}
       </div>
     </div>
