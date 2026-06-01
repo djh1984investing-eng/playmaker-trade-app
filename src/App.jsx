@@ -1,6 +1,15 @@
 import React, { useMemo, useState, useEffect } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
+
+/*
+PLAYMAKER REGRESSION GUARD / TRACKED FIXES
+- Tabs must open as separate pages. AI Signals board stays only on the AI Signals tab.
+- Settings tab remains separate for saved weekly levels and crater boxes.
+- Manual weekly levels and crater boxes must stay in the scanner for each logged-in user.
+- Volume Profile rows are deduped in the app before scanner use; raw Supabase rows are not deleted.
+- Signal notes stay attached to the AI signal/price-zone card.
+*/
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 const TICK_SIZE = 0.25;
@@ -417,6 +426,12 @@ useEffect(() => {
   const [signalNotes, setSignalNotes] = useState({});
 
   const ownerMode = isOwnerUser(user);
+
+  useEffect(() => {
+    if (!ownerMode && tab === "aiSignals") {
+      setTab("trade");
+    }
+  }, [ownerMode, tab]);
 
   useEffect(() => {
     try {
@@ -2463,6 +2478,8 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
+        {ownerMode && tab === "aiSignals" && (
+          <>
         <div className="mt-7 grid gap-5 md:grid-cols-5">
           <Dash label="Confluences" value={report.confluences} />
           <Dash label="Within 5 Points" value={report.within5} />
@@ -2561,11 +2578,15 @@ const exportJournalCSV = () => {
           </div>
         )}
 
+                  </>
+        )}
+
         <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
-            <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>
+            <Tab id="settings" tab={tab} setTab={setTab}>Settings</Tab>
+            {ownerMode && <Tab id="aiSignals" tab={tab} setTab={setTab}>AI Signals</Tab>}
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
