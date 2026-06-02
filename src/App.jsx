@@ -3,6 +3,7 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
+const maxConfluenceDistancePoints = 15;
 const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
 const TICK_SIZE = 0.25;
 const roundToTick = (price) => {
@@ -102,6 +103,14 @@ const arrayFromMaybe = (value) => {
 };
 
 const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+
+const isGenericPriceAlertSignal = (signal) => {
+  const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+  const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal?.signal, "") || "").toUpperCase();
+  const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
+  return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
+};
+
 
 const levelKeyFromName = (name) => {
   const text = String(name ?? "").trim();
@@ -419,6 +428,61 @@ useEffect(() => {
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
+
+  const previousAnchorMapRef = useRef(new Map());
+  const notificationAudioRef = useRef(null);
+
+  const requestDesktopNotifications = async () => {
+    if ("Notification" in window && Notification.permission === "default") {
+      try { await Notification.requestPermission(); } catch (_err) {}
+    }
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass && !notificationAudioRef.current) {
+        notificationAudioRef.current = new AudioContextClass();
+      }
+    } catch (_err) {}
+  };
+
+  const playNotificationSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const ctx = notificationAudioRef.current || (AudioContextClass ? new AudioContextClass() : null);
+      if (!ctx) return;
+      notificationAudioRef.current = ctx;
+      if (ctx.state === "suspended") ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (_err) {}
+  };
+
+  const notifyPlaymaker = (title, detail, voiceText) => {
+    playNotificationSound();
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body: detail });
+      }
+    } catch (_err) {}
+    try {
+      if ("speechSynthesis" in window && voiceText) {
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance(voiceText);
+        msg.rate = 0.95;
+        msg.pitch = 1;
+        window.speechSynthesis.speak(msg);
+      }
+    } catch (_err) {}
+  };
+
 
   const ownerMode = isOwnerUser(user);
   const [accessStatus, setAccessStatus] = useState("checking");
@@ -894,7 +958,7 @@ useEffect(() => {
 
   // Scanner input should include all fetched TradingView level rows.
   // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
-  const scannerAiSignals = aiSignals;
+  const scannerAiSignals = aiSignals.filter((signal) => !isGenericPriceAlertSignal(signal));
 
 
   const getSignalPayload = (signal) => ({
@@ -1200,11 +1264,16 @@ useEffect(() => {
     const push = (candidate) => { if (candidate) candidates.push(candidate); };
 
     if (type.includes("SESSION_DEVIATION")) {
+      // LOCKED RULE: SESSION_DEVIATION is a 5m-only Playmaker alert source.
+      // 1H/4H/D levels must come from SWING_EXTENSION_LEVELS or SWING_RETRACEMENT_LEVELS, not SESSION_DEVIATION.
+      const sessionDeviationTf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
+      if (sessionDeviationTf !== "5m") return uniqueEvidenceByPriceAndLabel(candidates);
+
       const stdvLabels = ["-6", "-5.5", "-5", "-4.5", "-4", "-3.5", "-3", "-2.5", "-2", "-1.5", "-1", "-0.786", "-0.705", "-0.618", "-0.5", "CE", "+0.5", "+0.618", "+0.705", "+0.786", "+1", "+1.5", "+2", "+2.5", "+3", "+3.5", "+4", "+4.5", "+5", "+5.5", "+6"];
       const levels = stdvLabels.map((label) => [label, label === "CE" ? firstDefined(payload.mid, payload.mean, payload.ce, payload.session_mid, payload.session_mean, payload.levels?.mid, payload.levels?.mean, payload.levels?.ce) : getNestedLevelValue(payload, label)]);
-      const tf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
-      const tfWeight = tf === "D" ? 1.7 : tf === "4H" ? 1.8 : tf === "1H" ? 1.45 : tf === "15m" ? 1.15 : 1;
-      const family = tf === "D" ? "Daily STDV" : tf === "4H" ? "4H STDV" : tf === "1H" ? "1H STDV" : tf === "15m" ? "15m STDV" : "5m Session STDV";
+      const tf = "5m";
+      const tfWeight = 1;
+      const family = "5m Session STDV";
       push(make(firstDefined(payload.session_high, payload.high, payload.range_high, payload.levels?.session_high), `${family} ${session} session high`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       push(make(firstDefined(payload.session_low, payload.low, payload.range_low, payload.levels?.session_low), `${family} ${session} session low`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       levels.forEach(([name, value]) => {
@@ -3453,22 +3522,4 @@ function Journal({ journal, journalStats, saveTrade, editTrade, exportJournalCSV
 
 function Behavior({ behavior, journal, learningStats = [] }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Behavior Rating</Title><div className="mt-6 text-7xl font-black text-[#00d27a]">{behavior.score}/10</div><p className="mt-3 text-zinc-300">Based on saved results and notes. Notes mentioning chasing/late reduce behavior score. Notes mentioning patience/followed plan improve it.</p><div className="mt-5 grid grid-cols-4 gap-3"><Small label="Trades" value={behavior.total} /><Small label="Wins" value={behavior.wins} /><Small label="Losses" value={behavior.losses} /><Small label="BE" value={behavior.be} /></div></Card><Card><Title>Private AI Result Learning</Title><p className="mt-2 text-sm text-zinc-400">Only your logged-in account sees this. It calculates which source families and repeat-level combinations are working from your saved results.</p><div className="mt-4 space-y-3">{learningStats.slice(0,8).map((row) => <div key={row.name} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between gap-3"><b className="text-[#ffcc19]">{row.name}</b><span className="font-black text-[#00d27a]">{row.winRate}%</span></div><div className="mt-1 text-xs text-zinc-500">Trades {row.trades} • Wins {row.wins} • Losses {row.losses} • BE {row.be} • 200+ moves {row.bigMove200 || 0} • Avg move {fmt(row.avgMaxMove)} • Avg DD {fmt(row.avgDrawdown)}</div></div>)}{learningStats.length === 0 && <div className="text-zinc-500">Save completed trade results to populate AI learning stats.</div>}</div></Card><Card className="lg:col-span-2"><Title>Behavior Notes</Title><div className="mt-4 space-y-3">{journal.slice(0,5).map((j) => <div key={j.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><b>{j.result}</b><p className="mt-1 text-zinc-400">{j.notes || "No notes"}</p></div>)}{journal.length === 0 && <div className="text-zinc-500">Save journal results to populate behavior reports.</div>}</div></Card></div>;
-}// PLAYMAKER CHANGE GUARD:
-// Protected: page/tab layout, journal submit/report flow, TradingView signal intake, scoring weights,
-// Whop/access behavior, and manual weekly/crater scanner inputs.
-// Current guardrails:
-// - Weekly/manual/crater confluence only counts and displays within 15 points.
-// - SESSION_DEVIATION is 5m-only.
-// - Scanner Feed Audit is owner-only inside AI Settings.
-// - Every AI/manual anchor has exactly one submit/report button and leaves the board after submission.
-// - Duplicate same-price/same-direction anchors are merged.
-// - Owner verification notes are editable only by owner and visible to customers.
-// - Notifications include price/direction/grade/sources/Eastern time plus popup, sound, and voice when allowed.
-  const isGenericPriceAlertSignal = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal.signal, "") || "").toUpperCase();
-    const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
-    return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
-  };
-
-
+}
