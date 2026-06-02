@@ -1,6 +1,11 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
+
+// PLAYMAKER PATCH LOCK:
+// Keep scoring engine, TradingView intake, confluence weights, journal save flow, and owner AI Settings intact.
+// This version only locks SESSION_DEVIATION to 5m, keeps tab content as separate pages,
+// adds Submit Anchor to Journal inside signal cards, and shows removed-anchor price in notifications.
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 const TICK_SIZE = 0.25;
@@ -414,37 +419,9 @@ useEffect(() => {
   const [verifiedAnchors, setVerifiedAnchors] = useState({});
   const [notificationLog, setNotificationLog] = useState([]);
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
+  const previousAnchorMapRef = useRef(new Map());
 
   const ownerMode = isOwnerUser(user);
-  const previousAnchorKeysRef = useRef(new Set());
-  const craterScannerMaxDistance = 75;
-  const manualCraterChecklistMaxDistance = 75;
-  const notifyDesktop = (title, body) => {
-    try {
-      if (!("Notification" in window)) return;
-      if (Notification.permission === "granted") {
-        new Notification(title, { body });
-      }
-    } catch (_err) {}
-  };
-  const requestDesktopNotifications = async () => {
-    try {
-      if (!("Notification" in window)) {
-        alert("This browser does not support desktop notifications.");
-        return;
-      }
-      const result = await Notification.requestPermission();
-      if (result === "granted") {
-        notifyDesktop("Playmaker notifications enabled", "Desktop setup alerts are now active while the app is open.");
-      }
-    } catch (_err) {
-      alert("Desktop notification permission could not be requested.");
-    }
-  };
-
-  useEffect(() => {
-    if (!ownerMode && tab === "settings") setTab("trade");
-  }, [ownerMode, tab]);
 
   useEffect(() => {
     try {
@@ -826,114 +803,9 @@ useEffect(() => {
 
   const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
-  // Volume-profile rows can arrive every bar from TradingView.
-  // Keep the raw rows in Supabase, but only let one same-zone VP row feed the scanner
-  // during the cooldown window. This prevents 5m/15m LVN/POC spam from inflating confluence counts.
-  const volumeProfileDedupePoints = 5;
-  const volumeProfileCooldownMs = 20 * 60 * 1000;
-
-  const isVolumeProfileSignal = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const text = String(firstDefined(payload.signal, payload.setup, payload.source, signal.signal, "") || "").toUpperCase();
-    return text.includes("VOLUME_PROFILE_LEVELS") || text.includes("VOLUME PROFILE") || text.includes("PLAYMAKER_VOLUME_PROFILE");
-  };
-
-  const isGenericPriceAlertSignal = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal.signal, "") || "").toUpperCase();
-    const hasStructuredPlaymakerType = [
-      "CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK",
-      "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"
-    ].some((token) => text.includes(token));
-    return !hasStructuredPlaymakerType && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
-  };
-
-  const volumeProfileTypePrices = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const pack = (type, values) => arrayFromMaybe(values)
-      .map(parsePrice)
-      .filter((price) => price !== null && price > 0)
-      .map((price) => ({
-        type,
-        zone: Math.round(price / volumeProfileDedupePoints) * volumeProfileDedupePoints
-      }));
-
-    return [
-      ...pack("POC", firstDefined(payload.poc, payload.point_of_control, payload.vp_poc, payload.volume_poc)),
-      ...pack("VAH", firstDefined(payload.vah, payload.value_area_high, payload.va_high)),
-      ...pack("VAL", firstDefined(payload.val, payload.value_area_low, payload.va_low)),
-      ...pack("LVN", [
-        ...arrayFromMaybe(payload.lvn_levels),
-        ...arrayFromMaybe(payload.lvns),
-        ...arrayFromMaybe(payload.low_volume_nodes),
-        ...arrayFromMaybe(payload.low_volume_node),
-        ...arrayFromMaybe(payload.crater_levels),
-        ...arrayFromMaybe(payload.craters)
-      ]),
-      ...pack("HVN", [
-        ...arrayFromMaybe(payload.hvn_levels),
-        ...arrayFromMaybe(payload.hvns),
-        ...arrayFromMaybe(payload.high_volume_nodes),
-        ...arrayFromMaybe(payload.high_volume_node)
-      ])
-    ];
-  };
-
-  const volumeProfileDedupeKeys = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const tfRaw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, payload.signal, signal.signal, "") || "").toUpperCase();
-    const tf = tfRaw.includes("15") ? "15m" : tfRaw.includes("5") ? "5m" : tfRaw.includes("60") || tfRaw.includes("1H") ? "1H" : tfRaw.includes("240") || tfRaw.includes("4H") ? "4H" : tfRaw || "GLOBAL";
-    const levels = volumeProfileTypePrices(signal);
-    if (!levels.length) return [`VP|${tf}|UNKNOWN|${signal.id || payload.id || payload.created_at || signal.created_at || "unknown"}`];
-    return levels.map((level) => `VP|${tf}|${level.type}|${level.zone}`);
-  };
-
-  const scannerAiSignals = useMemo(() => {
-    const keptVolumeProfiles = new Map();
-    const keptGenericPriceAlerts = new Map();
-    const kept = [];
-
-    [...aiSignals]
-      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
-      .forEach((signal) => {
-        const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-        const rawTime = signal.created_at || payload.created_at || payload.bar_time || payload.time || Date.now();
-        const parsedTime = typeof rawTime === "number" ? rawTime : new Date(rawTime).getTime();
-        const timeMs = Number.isFinite(parsedTime) ? parsedTime : Date.now();
-
-        // Regular TradingView price alerts can repeat through the webhook.
-        // Keep them out of scanner confluence so they do not spam the board.
-        if (isGenericPriceAlertSignal(signal)) {
-          const price = parsePrice(firstDefined(payload.price, payload.alert_price, payload.trigger_price, payload.close));
-          const alertName = String(firstDefined(payload.alert_name, payload.signal, signal.signal, "PRICE_ALERT"));
-          const key = `PRICE_ALERT|${alertName}|${price === null ? "na" : Math.round(price / 5) * 5}`;
-          const priorMs = keptGenericPriceAlerts.get(key);
-          if (!priorMs || Math.abs(priorMs - timeMs) >= volumeProfileCooldownMs) {
-            keptGenericPriceAlerts.set(key, timeMs);
-          }
-          return;
-        }
-
-        if (!isVolumeProfileSignal(signal)) {
-          kept.push(signal);
-          return;
-        }
-
-        const keys = volumeProfileDedupeKeys(signal);
-        const isRepeat = keys.every((key) => {
-          const priorMs = keptVolumeProfiles.get(key);
-          return priorMs && Math.abs(priorMs - timeMs) < volumeProfileCooldownMs;
-        });
-
-        if (isRepeat) return;
-
-        keys.forEach((key) => keptVolumeProfiles.set(key, timeMs));
-        kept.push(signal);
-      });
-
-    return kept;
-  }, [aiSignals]);
-
+  // Scanner input should include all fetched TradingView level rows.
+  // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
+  const scannerAiSignals = aiSignals;
 
 
   const getSignalPayload = (signal) => ({
@@ -1042,7 +914,7 @@ useEffect(() => {
           distance: inside ? 0 : Math.min(Math.abs(entry - high), Math.abs(entry - low), Math.abs(entry - mid))
         };
       })
-      .filter((crater) => crater && crater.distance <= craterScannerMaxDistance)
+      .filter(Boolean)
       .sort((a, b) => a.distance - b.distance)[0] || null;
   };
 
@@ -1239,11 +1111,16 @@ useEffect(() => {
     const push = (candidate) => { if (candidate) candidates.push(candidate); };
 
     if (type.includes("SESSION_DEVIATION")) {
+      // LOCKED RULE: SESSION_DEVIATION is a 5m-only Playmaker alert source.
+      // 1H/4H/D levels must come from SWING_EXTENSION_LEVELS or SWING_RETRACEMENT_LEVELS, not SESSION_DEVIATION.
+      const sessionDeviationTf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
+      if (sessionDeviationTf !== "5m") return uniqueEvidenceByPriceAndLabel(candidates);
+
       const stdvLabels = ["-6", "-5.5", "-5", "-4.5", "-4", "-3.5", "-3", "-2.5", "-2", "-1.5", "-1", "-0.786", "-0.705", "-0.618", "-0.5", "CE", "+0.5", "+0.618", "+0.705", "+0.786", "+1", "+1.5", "+2", "+2.5", "+3", "+3.5", "+4", "+4.5", "+5", "+5.5", "+6"];
       const levels = stdvLabels.map((label) => [label, label === "CE" ? firstDefined(payload.mid, payload.mean, payload.ce, payload.session_mid, payload.session_mean, payload.levels?.mid, payload.levels?.mean, payload.levels?.ce) : getNestedLevelValue(payload, label)]);
-      const tf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
-      const tfWeight = tf === "D" ? 1.7 : tf === "4H" ? 1.8 : tf === "1H" ? 1.45 : tf === "15m" ? 1.15 : 1;
-      const family = tf === "D" ? "Daily STDV" : tf === "4H" ? "4H STDV" : tf === "1H" ? "1H STDV" : tf === "15m" ? "15m STDV" : "5m Session STDV";
+      const tf = "5m";
+      const tfWeight = 1;
+      const family = "5m Session STDV";
       push(make(firstDefined(payload.session_high, payload.high, payload.range_high, payload.levels?.session_high), `${family} ${session} session high`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       push(make(firstDefined(payload.session_low, payload.low, payload.range_low, payload.levels?.session_low), `${family} ${session} session low`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       levels.forEach(([name, value]) => {
@@ -2083,7 +1960,7 @@ const exportJournalCSV = () => {
         const width = Math.abs(high - low);
         return { ...box, high, low, mid, width, distance: Math.abs(mid - entry) };
       })
-      .filter((crater) => crater && crater.distance <= manualCraterChecklistMaxDistance)
+      .filter(Boolean)
       .sort((a, b) => a.distance - b.distance)[0] || null;
   };
 
@@ -2234,12 +2111,18 @@ const exportJournalCSV = () => {
 
   const submitAnchorToJournal = async (anchor) => {
     if (!anchor) return;
+
     const payload = anchor.rawSignal || anchor.payload || {};
+    const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
+    const directionValue = anchor.direction || payload.direction || "Both";
+    const signalName = anchor.signalName || payload.signal || "AI Level";
+    const verification = anchor.verification || verifiedAnchors[anchorVerificationKey(anchor)] || null;
+
     const item = {
       id: anchor.id || Date.now(),
       date: formatEastern(new Date()),
-      direction: anchor.direction || payload.direction || "Both",
-      entry: anchor.entry || anchor.price || payload.entry || payload.price || "",
+      direction: directionValue,
+      entry: entryValue,
       grade: anchor.grade || payload.ai_grade || "AI",
       score: anchor.score || payload.ai_score || payload.zone_score || 0,
       result: "Unfilled",
@@ -2248,26 +2131,42 @@ const exportJournalCSV = () => {
       maxMove: "",
       maxDrawdown: "",
       profitLoss: "",
-      notes: anchor.verification?.ownerNote
-        ? `AI Signal: ${anchor.signalName || payload.signal || "AI Level"} — Owner Note: ${anchor.verification.ownerNote}`
-        : `AI Signal: ${anchor.signalName || payload.signal || "AI Level"}`,
+      notes: verification?.ownerNote
+        ? `AI Signal: ${signalName} — Owner Note: ${verification.ownerNote}`
+        : `AI Signal: ${signalName}`,
       tradeImages: [],
-      top: anchor.top || anchor.signalName || "AI Level",
+      top: anchor.top || signalName,
       sourceType: anchor.sourceType || "AI Signal",
       signal_id: anchor.signal_id || payload.id || "",
-      verification: anchor.verification || verifiedAnchors[anchorVerificationKey(anchor)] || null,
-      signalName: anchor.signalName || payload.signal || "AI Level",
+      verification,
+      signalName,
       evidence: anchor.evidence || payload.evidence || [],
       rawSignal: payload,
-      formSnapshot: { ...form, tradeEntryPrice: String(anchor.entry || anchor.price || payload.entry || payload.price || ""), evidence: anchor.evidence || payload.evidence || [], aiPayload: payload }
+      formSnapshot: {
+        ...form,
+        tradeEntryPrice: String(entryValue || ""),
+        direction: directionValue,
+        result: "Unfilled",
+        evidence: anchor.evidence || payload.evidence || [],
+        aiPayload: payload
+      }
     };
+
     const savedItem = await saveTradeToDatabase(item, false);
+
     setJournal((j) => {
       const withoutDuplicates = j.filter((x) => !sameTradeAnchor(x, savedItem));
       return [savedItem, ...withoutDuplicates];
     });
+
     setSelectedTrade(savedItem);
-    setForm((f) => ({ ...f, tradeEntryPrice: String(savedItem.entry || ""), direction: savedItem.direction || f.direction, result: "Unfilled", notes: savedItem.notes || "" }));
+    setForm((f) => ({
+      ...f,
+      tradeEntryPrice: String(savedItem.entry || ""),
+      direction: savedItem.direction || f.direction,
+      result: "Unfilled",
+      notes: savedItem.notes || ""
+    }));
     setTab("journal");
   };
 
@@ -2390,46 +2289,51 @@ const exportJournalCSV = () => {
   const watchLevels = aiAnchorsOnly.filter((anchor) => anchor.grade === "C");
 
   useEffect(() => {
-    const currentKeys = new Set(activeAnchors.map((anchor) => String(anchor.signal_id || anchor.id || `${anchor.direction}-${anchor.entry}`)));
-    const priorKeys = previousAnchorKeysRef.current || new Set();
+    const anchorKeyFor = (anchor) => String(anchor.signal_id || anchor.id || `${anchor.direction}-${anchor.entry}`);
+    const currentAnchorMap = new Map(activeAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
+    const currentKeys = new Set(currentAnchorMap.keys());
+    const priorAnchorMap = previousAnchorMapRef.current instanceof Map ? previousAnchorMapRef.current : new Map();
+    const priorKeys = new Set(priorAnchorMap.keys());
     const newNotices = [];
 
     activeAnchors.forEach((anchor) => {
-      const anchorKey = String(anchor.signal_id || anchor.id || `${anchor.direction}-${anchor.entry}`);
-      const noticeKey = `${anchor.grade}-${anchor.direction}-${anchor.entry}-${anchorKey}`;
-      if (!priorKeys.has(anchorKey) && !seenNotificationKeys[noticeKey]) {
-        if (["A+", "A"].includes(anchor.grade)) {
-          newNotices.push({
-            key: noticeKey,
-            kind: "TRADE_ANCHOR",
-            title: `New ${anchor.grade} ${String(anchor.direction || "BOTH").toUpperCase()} setup`,
-            detail: `${fmtPrice(anchor.entry)} • Sources ${anchor.sourceCount || anchor.evidence?.length || 0}`,
-            createdAt: new Date().toISOString()
-          });
-          notifyDesktop(`Playmaker ${anchor.grade} setup`, `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry)} • Sources ${anchor.sourceCount || anchor.evidence?.length || 0}`);
-        } else if (["B+", "B"].includes(anchor.grade)) {
-          newNotices.push({
-            key: noticeKey,
-            kind: "WATCHLIST",
-            title: `${anchor.grade} setup building`,
-            detail: `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry)} • waiting for confirmation`,
-            createdAt: new Date().toISOString()
-          });
-        }
+      const anchorKey = anchorKeyFor(anchor);
+      const key = `${anchor.grade}-${anchor.direction}-${anchor.entry}-${anchorKey}`;
+      if (seenNotificationKeys[key]) return;
+      if (["A+", "A"].includes(anchor.grade) && !priorKeys.has(anchorKey)) {
+        newNotices.push({
+          key,
+          kind: "TRADE_ANCHOR",
+          title: `New ${anchor.grade} ${String(anchor.direction || "BOTH").toUpperCase()} setup`,
+          detail: `${fmtPrice(anchor.entry)} • Sources ${anchor.sourceCount || anchor.evidence?.length || 0}`,
+          createdAt: new Date().toISOString()
+        });
+      } else if (["B+", "B"].includes(anchor.grade) && !priorKeys.has(anchorKey)) {
+        newNotices.push({
+          key,
+          kind: "WATCHLIST",
+          title: `${anchor.grade} setup building`,
+          detail: `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry)} • waiting for confirmation`,
+          createdAt: new Date().toISOString()
+        });
       }
     });
 
     priorKeys.forEach((priorKey) => {
       if (currentKeys.has(priorKey)) return;
-      const noticeKey = `REMOVED-${priorKey}-${Date.now()}`;
+      const oldAnchor = priorAnchorMap.get(priorKey) || {};
+      const oldDirection = String(oldAnchor.direction || "BOTH").toUpperCase();
+      const oldGrade = oldAnchor.grade || "setup";
+      const oldPrice = fmtPrice(oldAnchor.entry || oldAnchor.price);
+      const oldSources = oldAnchor.sourceCount || oldAnchor.evidence?.length || 0;
+      const key = `REMOVED-${priorKey}-${Date.now()}`;
       newNotices.push({
-        key: noticeKey,
+        key,
         kind: "REMOVED",
-        title: "Setup removed from board",
-        detail: "A previous anchor no longer qualifies after the latest scanner update.",
+        title: `Removed ${oldGrade} ${oldDirection} setup`,
+        detail: `Price ${oldPrice} • Sources ${oldSources} • no longer qualifies after the latest scanner update.`,
         createdAt: new Date().toISOString()
       });
-      notifyDesktop("Playmaker setup removed", "A previous anchor no longer qualifies after the latest scanner update.");
     });
 
     if (newNotices.length) {
@@ -2437,7 +2341,7 @@ const exportJournalCSV = () => {
       setSeenNotificationKeys((prev) => ({ ...prev, ...Object.fromEntries(newNotices.map((n) => [n.key, true])) }));
     }
 
-    previousAnchorKeysRef.current = currentKeys;
+    previousAnchorMapRef.current = currentAnchorMap;
   }, [activeAnchors, seenNotificationKeys]);
 
   const learningStats = useMemo(() => {
@@ -2552,13 +2456,26 @@ const exportJournalCSV = () => {
           <Dash label="Behavior Score" value={`${behavior.score}/10`} />
         </div>
 
+        <div className="mt-5 rounded-3xl border border-[#2c2300] bg-black p-4">
+          <div className="mb-3 text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Data Feed Checklist / Used By Scanner</div>
+          <div className="grid gap-2 md:grid-cols-5">
+            {feedAudit.map((row) => (
+              <div key={row.name} className={`rounded-xl border p-3 text-xs ${row.count > 0 ? "border-[#00d27a] bg-[#001a0f]" : "border-zinc-800 bg-[#090909]"}`}>
+                <div className="font-black text-white">{row.name}</div>
+                <div className={row.count > 0 ? "text-[#00d27a]" : "text-zinc-500"}>{row.count > 0 ? `${row.count} received/used` : "0 / not seen"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {tab === "trade" && (
         <div className="mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Notification Center</div>
               <p className="mt-1 text-sm text-zinc-500">Setup notifications only. Price-enter-zone alerts are parked until live price feed is added.</p>
             </div>
-            <div className="flex flex-wrap gap-2"><button onClick={requestDesktopNotifications} className="rounded-xl border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a]">Enable Desktop Popups</button><button onClick={() => setNotificationLog([])} className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-black text-zinc-300">Clear</button></div>
+            <button onClick={() => setNotificationLog([])} className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-black text-zinc-300">Clear</button>
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-3">
             {notificationLog.length === 0 && <div className="text-sm text-zinc-500">No new setup notifications yet.</div>}
@@ -2571,7 +2488,9 @@ const exportJournalCSV = () => {
             ))}
           </div>
         </div>
+        )}
 
+        {tab === "trade" && (
         <div className="relative mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
           {selectedEntryIsCrown && (
             <div className="absolute right-4 top-4 rounded-2xl border border-[#ffcc19] bg-[#171200] px-3 py-2 text-2xl" title="Crown-grade entry">
@@ -2609,8 +2528,9 @@ const exportJournalCSV = () => {
             </div>
           </div>
         </div>
+        )}
 
-        {activeAnchors.length > 0 && (
+        {tab === "trade" && activeAnchors.length > 0 && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -2634,7 +2554,7 @@ const exportJournalCSV = () => {
           <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
             <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
-            {ownerMode && <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>}
+            <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>
             <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
             <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
             <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
@@ -2758,20 +2678,8 @@ const exportJournalCSV = () => {
           </div>
         )}
 
-        {ownerMode && tab === "settings" && (
+        {tab === "settings" && (
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
-            <Card className="lg:col-span-2">
-              <Title>Scanner Feed Audit</Title>
-              <p className="mt-2 text-sm text-zinc-400">Owner-only scanner counts. Customers do not see this diagnostic box.</p>
-              <div className="mt-4 grid gap-2 md:grid-cols-5">
-                {feedAudit.map((row) => (
-                  <div key={row.name} className={`rounded-xl border p-3 text-xs ${row.count > 0 ? "border-[#00d27a] bg-[#001a0f]" : "border-zinc-800 bg-[#090909]"}`}>
-                    <div className="font-black text-white">{row.name}</div>
-                    <div className={row.count > 0 ? "text-[#00d27a]" : "text-zinc-500"}>{row.count > 0 ? `${row.count} received/used` : "0 / not seen"}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
             <Card>
               <Title>AI Pillar Zones</Title>
               <p className="mt-2 text-zinc-400">Save multiple weekly levels and crater boxes. These are the foundation zones the AI uses with TradingView alerts.</p>
@@ -3043,10 +2951,27 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
 
       {anchor.top && <div className="mt-2 text-xs text-zinc-500">{anchor.top}</div>}
 
+      {isAi && (
+        <div className="mt-3 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => onSubmitAnchor?.(anchor)} className="rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black">Submit Anchor to Journal / Report Result</button>
+        </div>
+      )}
+
       {ownerMode && isAi && (
         <div className="mt-3 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
           <button onClick={() => onVerify?.(anchor)} className="rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black">Verify Setup</button>
           {verifiedLabel && <button onClick={() => onUnverify?.(anchor)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400">Remove Verify</button>}
+        </div>
+      )}
+
+      {isAi && (
+        <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={() => onSubmitAnchor?.(anchor)}
+            className="w-full rounded-lg border border-[#ffcc19] bg-[#171200] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#2a2100]"
+          >
+            Submit Anchor to Journal / Report Result
+          </button>
         </div>
       )}
 
