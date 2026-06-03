@@ -3,6 +3,7 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
+const maxConfluenceDistancePoints = 15;
 const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
 const TICK_SIZE = 0.25;
 const roundToTick = (price) => {
