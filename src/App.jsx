@@ -3,7 +3,6 @@ import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
-const maxConfluenceDistancePoints = 15;
 const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
 const TICK_SIZE = 0.25;
 const roundToTick = (price) => {
@@ -103,14 +102,6 @@ const arrayFromMaybe = (value) => {
 };
 
 const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
-
-const isGenericPriceAlertSignal = (signal) => {
-  const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-  const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal?.signal, "") || "").toUpperCase();
-  const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
-  return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
-};
-
 
 const levelKeyFromName = (name) => {
   const text = String(name ?? "").trim();
@@ -427,62 +418,8 @@ useEffect(() => {
   const [notificationLog, setNotificationLog] = useState([]);
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
+  const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
-
-  const previousAnchorMapRef = useRef(new Map());
-  const notificationAudioRef = useRef(null);
-
-  const requestDesktopNotifications = async () => {
-    if ("Notification" in window && Notification.permission === "default") {
-      try { await Notification.requestPermission(); } catch (_err) {}
-    }
-    try {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      if (AudioContextClass && !notificationAudioRef.current) {
-        notificationAudioRef.current = new AudioContextClass();
-      }
-    } catch (_err) {}
-  };
-
-  const playNotificationSound = () => {
-    try {
-      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-      const ctx = notificationAudioRef.current || (AudioContextClass ? new AudioContextClass() : null);
-      if (!ctx) return;
-      notificationAudioRef.current = ctx;
-      if (ctx.state === "suspended") ctx.resume();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.001, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.5);
-    } catch (_err) {}
-  };
-
-  const notifyPlaymaker = (title, detail, voiceText) => {
-    playNotificationSound();
-    try {
-      if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(title, { body: detail });
-      }
-    } catch (_err) {}
-    try {
-      if ("speechSynthesis" in window && voiceText) {
-        window.speechSynthesis.cancel();
-        const msg = new SpeechSynthesisUtterance(voiceText);
-        msg.rate = 0.95;
-        msg.pitch = 1;
-        window.speechSynthesis.speak(msg);
-      }
-    } catch (_err) {}
-  };
-
 
   const ownerMode = isOwnerUser(user);
   const [accessStatus, setAccessStatus] = useState("checking");
@@ -586,6 +523,19 @@ useEffect(() => {
       localStorage.setItem("playmaker_submitted_anchor_keys", JSON.stringify(submittedAnchorKeys));
     } catch (_err) {}
   }, [submittedAnchorKeys]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("playmaker_filled_anchor_keys") || "{}");
+      if (saved && typeof saved === "object") setFilledAnchorKeys(saved);
+    } catch (_err) {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("playmaker_filled_anchor_keys", JSON.stringify(filledAnchorKeys));
+    } catch (_err) {}
+  }, [filledAnchorKeys]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -958,7 +908,7 @@ useEffect(() => {
 
   // Scanner input should include all fetched TradingView level rows.
   // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
-  const scannerAiSignals = aiSignals.filter((signal) => !isGenericPriceAlertSignal(signal));
+  const scannerAiSignals = aiSignals;
 
 
   const getSignalPayload = (signal) => ({
@@ -1264,16 +1214,11 @@ useEffect(() => {
     const push = (candidate) => { if (candidate) candidates.push(candidate); };
 
     if (type.includes("SESSION_DEVIATION")) {
-      // LOCKED RULE: SESSION_DEVIATION is a 5m-only Playmaker alert source.
-      // 1H/4H/D levels must come from SWING_EXTENSION_LEVELS or SWING_RETRACEMENT_LEVELS, not SESSION_DEVIATION.
-      const sessionDeviationTf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
-      if (sessionDeviationTf !== "5m") return uniqueEvidenceByPriceAndLabel(candidates);
-
       const stdvLabels = ["-6", "-5.5", "-5", "-4.5", "-4", "-3.5", "-3", "-2.5", "-2", "-1.5", "-1", "-0.786", "-0.705", "-0.618", "-0.5", "CE", "+0.5", "+0.618", "+0.705", "+0.786", "+1", "+1.5", "+2", "+2.5", "+3", "+3.5", "+4", "+4.5", "+5", "+5.5", "+6"];
       const levels = stdvLabels.map((label) => [label, label === "CE" ? firstDefined(payload.mid, payload.mean, payload.ce, payload.session_mid, payload.session_mean, payload.levels?.mid, payload.levels?.mean, payload.levels?.ce) : getNestedLevelValue(payload, label)]);
-      const tf = "5m";
-      const tfWeight = 1;
-      const family = "5m Session STDV";
+      const tf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
+      const tfWeight = tf === "D" ? 1.7 : tf === "4H" ? 1.8 : tf === "1H" ? 1.45 : tf === "15m" ? 1.15 : 1;
+      const family = tf === "D" ? "Daily STDV" : tf === "4H" ? "4H STDV" : tf === "1H" ? "1H STDV" : tf === "15m" ? "15m STDV" : "5m Session STDV";
       push(make(firstDefined(payload.session_high, payload.high, payload.range_high, payload.levels?.session_high), `${family} ${session} session high`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       push(make(firstDefined(payload.session_low, payload.low, payload.range_low, payload.levels?.session_low), `${family} ${session} session low`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       levels.forEach(([name, value]) => {
@@ -2296,26 +2241,57 @@ const exportJournalCSV = () => {
     }
   };
 
-  const anchorSubmitKey = (anchor) => {
+  const anchorPriceKey = (value) => {
+    const price = parsePrice(value);
+    return price === null ? "NA" : String(Math.round(price * 4) / 4);
+  };
+
+  const anchorBaseKey = (anchor) => {
     const direction = String(anchor?.direction || "BOTH").toUpperCase();
-    const price = parsePrice(anchor?.entry || anchor?.price || anchor?.rawSignal?.entry || anchor?.rawSignal?.price);
-    const priceKey = price === null ? "NA" : String(Math.round(price * 4) / 4);
-    return `${direction}|${priceKey}|${String(anchor?.signal_id || anchor?.sourceId || anchor?.id || "")}`;
+    const price = anchor?.entry ?? anchor?.price ?? anchor?.rawSignal?.entry ?? anchor?.rawSignal?.price;
+    return `${direction}|${anchorPriceKey(price)}`;
+  };
+
+  const anchorSubmitKey = (anchor) => {
+    return `${anchorBaseKey(anchor)}|${String(anchor?.signal_id || anchor?.sourceId || anchor?.id || "")}`;
   };
 
   const zoneSubmitKey = (zone) => {
-    const direction = String(zone?.direction || "BOTH").toUpperCase();
-    const price = parsePrice(zone?.price || zone?.entry);
-    const priceKey = price === null ? "NA" : String(Math.round(price * 4) / 4);
-    return `${direction}|${priceKey}|${String(zone?.sourceId || zone?.id || "")}`;
+    return `${anchorBaseKey(zone)}|${String(zone?.sourceId || zone?.id || "")}`;
+  };
+
+  const anchorEvidenceSignature = (anchor) => {
+    const evidence = Array.isArray(anchor?.evidence) ? anchor.evidence : Array.isArray(anchor?.payload?.evidence) ? anchor.payload.evidence : [];
+    const sourceCount = Number(anchor?.sourceCount || evidence.length || 0);
+    const score = Number(anchor?.score || anchor?.zoneScore || anchor?.payload?.zone_score || 0);
+    const evidenceSig = evidence
+      .map((item) => `${item.sourceType || ""}:${item.label || ""}:${anchorPriceKey(item.price)}`)
+      .sort()
+      .join("|");
+    return { sourceCount, score, evidenceSig };
+  };
+
+  const submittedRecordForAnchor = (anchor) => {
+    const full = submittedAnchorKeys[anchorSubmitKey(anchor)];
+    const base = submittedAnchorKeys[`${anchorBaseKey(anchor)}|`];
+    return full || base || null;
+  };
+
+  const hasMeaningfulNewInfo = (zone, submittedRecord) => {
+    if (!submittedRecord || submittedRecord === true) return false;
+    const sig = anchorEvidenceSignature(zone);
+    const oldSourceCount = Number(submittedRecord.sourceCount || 0);
+    const oldScore = Number(submittedRecord.score || 0);
+    const oldEvidenceSig = String(submittedRecord.evidenceSig || "");
+    return sig.sourceCount > oldSourceCount || sig.score >= oldScore + 5 || (oldEvidenceSig && sig.evidenceSig && sig.evidenceSig !== oldEvidenceSig && sig.sourceCount >= oldSourceCount + 1);
   };
 
   const submittedZoneMatches = (zone) => {
-    if (submittedAnchorKeys[zoneSubmitKey(zone)]) return true;
+    const submittedRecord = submittedRecordForAnchor(zone);
+    if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
+
     const zonePrice = parsePrice(zone?.price || zone?.entry);
     const zoneDirection = String(zone?.direction || "BOTH").toUpperCase();
-    const priceOnlyKey = `${zoneDirection}|${zonePrice === null ? "NA" : String(Math.round(zonePrice * 4) / 4)}|`;
-    if (submittedAnchorKeys[priceOnlyKey]) return true;
     return journal.some((j) => {
       if (isOpenOrder(j)) return false;
       const journalPrice = parsePrice(j.entry || j.entry_price);
@@ -2326,6 +2302,24 @@ const exportJournalCSV = () => {
       const signalMatches = journalSignalId && String(zone?.sourceId || "").includes(journalSignalId);
       return sameDirection && (samePrice || signalMatches);
     });
+  };
+
+  const markAnchorFilled = (anchor) => {
+    if (!anchor) return;
+    const key = anchorBaseKey(anchor);
+    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
+    setFilledAnchorKeys((prev) => ({
+      ...prev,
+      [key]: { filledAt: new Date().toISOString(), detail }
+    }));
+    setNotificationLog((prev) => [{
+      key: `FILLED-${key}-${Date.now()}`,
+      kind: "FILLED",
+      title: "Playmaker setup filled",
+      detail,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+    notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
   };
 
   const submitAnchorToJournal = async (anchor) => {
@@ -2380,10 +2374,18 @@ const exportJournalCSV = () => {
     });
 
     const submittedKey = anchorSubmitKey(anchor);
-    const submittedPrice = parsePrice(entryValue);
-    const submittedDirection = String(directionValue || "BOTH").toUpperCase();
-    const priceOnlyKey = `${submittedDirection}|${submittedPrice === null ? "NA" : String(Math.round(submittedPrice * 4) / 4)}|`;
-    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: true, [priceOnlyKey]: true }));
+    const submittedBaseKey = anchorBaseKey(anchor);
+    const priceOnlyKey = `${submittedBaseKey}|`;
+    const submittedRecord = {
+      submittedAt: new Date().toISOString(),
+      ...anchorEvidenceSignature(anchor)
+    };
+    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: submittedRecord, [priceOnlyKey]: submittedRecord }));
+    setFilledAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[submittedBaseKey];
+      return next;
+    });
 
     const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} • Grade ${item.grade} • Sources ${anchor.sourceCount || anchor.evidence?.length || 0} • submitted to journal • ${formatEastern(new Date())}`;
     setNotificationLog((prev) => [{
@@ -2560,7 +2562,8 @@ const exportJournalCSV = () => {
       return `${direction}|${price === null ? "NA" : Math.round(price * 4) / 4}`;
     };
 
-    const currentAnchorMap = new Map(activeAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
+    const notifyEligibleAnchors = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
+    const currentAnchorMap = new Map(notifyEligibleAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
     const priorAnchorMap = previousAnchorMapRef.current instanceof Map ? previousAnchorMapRef.current : new Map();
     const newNotices = [];
 
@@ -2595,6 +2598,7 @@ const exportJournalCSV = () => {
 
     priorAnchorMap.forEach((oldAnchor, anchorKey) => {
       if (currentAnchorMap.has(anchorKey)) return;
+      if (submittedAnchorKeys[`${anchorKey}|`] || submittedAnchorKeys[anchorSubmitKey(oldAnchor)]) return;
       const directionText = String(oldAnchor.direction || "BOTH").toUpperCase();
       const priceText = fmtPrice(oldAnchor.entry || oldAnchor.price);
       const gradeText = oldAnchor.grade || "Setup";
@@ -2613,7 +2617,7 @@ const exportJournalCSV = () => {
     }
 
     previousAnchorMapRef.current = currentAnchorMap;
-  }, [activeAnchors, seenNotificationKeys]);
+  }, [activeAnchors, seenNotificationKeys, submittedAnchorKeys]);
 
 
   const learningStats = useMemo(() => {
@@ -2857,12 +2861,12 @@ const exportJournalCSV = () => {
               <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review / Report</button>
             </div>
 
-            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
-            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
-            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
+            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
+            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
+            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
 
             {unfilledOrders.length > 0 && (
-              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
+              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
             )}
           </div>
         )}
@@ -3235,13 +3239,15 @@ function EvidenceList({ evidence = [] }) {
   );
 }
 
-function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor }) {
+function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled }) {
   const isAi = anchor.sourceType === "AI Signal";
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
   const verification = anchor.verification || verifiedAnchors[verificationKey] || null;
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
+  const filledKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
+  const filledRecord = filledAnchorKeys[filledKey] || null;
   const [draftOwnerNote, setDraftOwnerNote] = useState(verification?.ownerNote || "");
   useEffect(() => {
     setDraftOwnerNote(verification?.ownerNote || "");
@@ -3257,6 +3263,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         </span>
         {isAi && <span className="rounded-full border border-zinc-700 px-3 py-1 text-xs font-black text-zinc-300">Sources {anchor.sourceCount || evidence.length || 0}</span>}
         {verifiedLabel && <span className="rounded-full border border-[#00d27a] bg-[#001a0f] px-3 py-1 text-xs font-black text-[#00d27a]">{verifiedLabel}</span>}
+        {filledRecord && <span className="rounded-full border border-[#ffcc19] bg-[#171200] px-3 py-1 text-xs font-black text-[#ffcc19]">FILLED — JOURNAL NEEDED</span>}
       </div>
 
       <div className="text-xl font-black text-[#00d27a]">
@@ -3314,7 +3321,13 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         </div>
       )}
 
-      <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+      <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => onMarkFilled?.(anchor)}
+          className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
+        >
+          Mark Filled — Keep On Board
+        </button>
         <button
           onClick={() => onSubmitAnchor?.(anchor)}
           className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
@@ -3328,7 +3341,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   );
 }
 
-function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor }) {
+function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled }) {
   if (!items.length) return null;
   return (
     <div className="mt-5">
@@ -3338,7 +3351,7 @@ function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ow
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {items.map((anchor) => (
-          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} />
+          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} />
         ))}
       </div>
     </div>
@@ -3522,4 +3535,22 @@ function Journal({ journal, journalStats, saveTrade, editTrade, exportJournalCSV
 
 function Behavior({ behavior, journal, learningStats = [] }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Behavior Rating</Title><div className="mt-6 text-7xl font-black text-[#00d27a]">{behavior.score}/10</div><p className="mt-3 text-zinc-300">Based on saved results and notes. Notes mentioning chasing/late reduce behavior score. Notes mentioning patience/followed plan improve it.</p><div className="mt-5 grid grid-cols-4 gap-3"><Small label="Trades" value={behavior.total} /><Small label="Wins" value={behavior.wins} /><Small label="Losses" value={behavior.losses} /><Small label="BE" value={behavior.be} /></div></Card><Card><Title>Private AI Result Learning</Title><p className="mt-2 text-sm text-zinc-400">Only your logged-in account sees this. It calculates which source families and repeat-level combinations are working from your saved results.</p><div className="mt-4 space-y-3">{learningStats.slice(0,8).map((row) => <div key={row.name} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between gap-3"><b className="text-[#ffcc19]">{row.name}</b><span className="font-black text-[#00d27a]">{row.winRate}%</span></div><div className="mt-1 text-xs text-zinc-500">Trades {row.trades} • Wins {row.wins} • Losses {row.losses} • BE {row.be} • 200+ moves {row.bigMove200 || 0} • Avg move {fmt(row.avgMaxMove)} • Avg DD {fmt(row.avgDrawdown)}</div></div>)}{learningStats.length === 0 && <div className="text-zinc-500">Save completed trade results to populate AI learning stats.</div>}</div></Card><Card className="lg:col-span-2"><Title>Behavior Notes</Title><div className="mt-4 space-y-3">{journal.slice(0,5).map((j) => <div key={j.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><b>{j.result}</b><p className="mt-1 text-zinc-400">{j.notes || "No notes"}</p></div>)}{journal.length === 0 && <div className="text-zinc-500">Save journal results to populate behavior reports.</div>}</div></Card></div>;
-}
+}// PLAYMAKER CHANGE GUARD:
+// Protected: page/tab layout, journal submit/report flow, TradingView signal intake, scoring weights,
+// Whop/access behavior, and manual weekly/crater scanner inputs.
+// Current guardrails:
+// - Weekly/manual/crater confluence only counts and displays within 15 points.
+// - SESSION_DEVIATION is 5m-only.
+// - Scanner Feed Audit is owner-only inside AI Settings.
+// - Every AI/manual anchor has exactly one submit/report button and leaves the board after submission.
+// - Duplicate same-price/same-direction anchors are merged.
+// - Owner verification notes are editable only by owner and visible to customers.
+// - Notifications include price/direction/grade/sources/Eastern time plus popup, sound, and voice when allowed.
+  const isGenericPriceAlertSignal = (signal) => {
+    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+    const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal.signal, "") || "").toUpperCase();
+    const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
+    return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
+  };
+
+
