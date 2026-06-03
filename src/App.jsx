@@ -103,7 +103,6 @@ const arrayFromMaybe = (value) => {
 };
 
 const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
-
 const levelKeyFromName = (name) => {
   const text = String(name ?? "").trim();
   if (!text) return "";
@@ -132,6 +131,14 @@ const getNestedLevelValue = (payload, label) => {
     payload?.[`minus_${alt}`], levels?.[`minus_${alt}`],
     payload?.[text], levels?.[text]
   );
+};
+
+
+const isGenericPriceAlertSignal = (signal) => {
+  const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+  const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal?.signal, "") || "").toUpperCase();
+  const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
+  return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
 };
 
 const uniqueEvidenceByPriceAndLabel = (items) => {
@@ -419,20 +426,15 @@ useEffect(() => {
   const [notificationLog, setNotificationLog] = useState([]);
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
-  const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
   const previousAnchorMapRef = useRef(new Map());
   const notificationAudioRef = useRef(null);
 
   const requestDesktopNotifications = async () => {
-    if (typeof window === "undefined") return;
-    try {
-      if ("Notification" in window && Notification.permission === "default") {
-        await Notification.requestPermission();
-      }
-    } catch (_err) {}
-
+    if ("Notification" in window && Notification.permission === "default") {
+      try { await Notification.requestPermission(); } catch (_err) {}
+    }
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass && !notificationAudioRef.current) {
@@ -442,14 +444,12 @@ useEffect(() => {
   };
 
   const playNotificationSound = () => {
-    if (typeof window === "undefined") return;
     try {
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       const ctx = notificationAudioRef.current || (AudioContextClass ? new AudioContextClass() : null);
       if (!ctx) return;
       notificationAudioRef.current = ctx;
       if (ctx.state === "suspended") ctx.resume();
-
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
@@ -466,15 +466,13 @@ useEffect(() => {
 
   const notifyPlaymaker = (title, detail, voiceText) => {
     playNotificationSound();
-
     try {
-      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      if ("Notification" in window && Notification.permission === "granted") {
         new Notification(title, { body: detail });
       }
     } catch (_err) {}
-
     try {
-      if (typeof window !== "undefined" && "speechSynthesis" in window && voiceText) {
+      if ("speechSynthesis" in window && voiceText) {
         window.speechSynthesis.cancel();
         const msg = new SpeechSynthesisUtterance(voiceText);
         msg.rate = 0.95;
@@ -587,45 +585,6 @@ useEffect(() => {
       localStorage.setItem("playmaker_submitted_anchor_keys", JSON.stringify(submittedAnchorKeys));
     } catch (_err) {}
   }, [submittedAnchorKeys]);
-
-  useEffect(() => {
-    // Rebuild hidden/submitted anchor keys from reported/closed journal rows.
-    // This stops a submitted setup from returning after refresh/deploy.
-    setSubmittedAnchorKeys((prev) => {
-      const next = { ...prev };
-      journal.forEach((item) => {
-        if (isOpenOrder(item)) return;
-        const direction = String(item.direction || "BOTH").toUpperCase();
-        const price = parsePrice(item.entry || item.entry_price);
-        if (price === null) return;
-        const baseKey = `${direction}|${String(Math.round(price * 4) / 4)}|`;
-        if (!next[baseKey]) {
-          next[baseKey] = {
-            submittedAt: item.date || new Date().toISOString(),
-            sourceCount: Number(item.sourceCount || item.evidence?.length || 0),
-            score: Number(item.score || 0),
-            evidenceSig: Array.isArray(item.evidence)
-              ? item.evidence.map((ev) => `${ev.sourceType || ""}:${ev.label || ""}:${anchorPriceKey(ev.price)}`).sort().join("|")
-              : ""
-          };
-        }
-      });
-      return next;
-    });
-  }, [journal]);
-
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("playmaker_filled_anchor_keys") || "{}");
-      if (saved && typeof saved === "object") setFilledAnchorKeys(saved);
-    } catch (_err) {}
-  }, []);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("playmaker_filled_anchor_keys", JSON.stringify(filledAnchorKeys));
-    } catch (_err) {}
-  }, [filledAnchorKeys]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -1304,11 +1263,16 @@ useEffect(() => {
     const push = (candidate) => { if (candidate) candidates.push(candidate); };
 
     if (type.includes("SESSION_DEVIATION")) {
+      // LOCKED RULE: SESSION_DEVIATION is a 5m-only Playmaker alert source.
+      // 1H/4H/D levels must come from SWING_EXTENSION_LEVELS or SWING_RETRACEMENT_LEVELS, not SESSION_DEVIATION.
+      const sessionDeviationTf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
+      if (sessionDeviationTf !== "5m") return uniqueEvidenceByPriceAndLabel(candidates);
+
       const stdvLabels = ["-6", "-5.5", "-5", "-4.5", "-4", "-3.5", "-3", "-2.5", "-2", "-1.5", "-1", "-0.786", "-0.705", "-0.618", "-0.5", "CE", "+0.5", "+0.618", "+0.705", "+0.786", "+1", "+1.5", "+2", "+2.5", "+3", "+3.5", "+4", "+4.5", "+5", "+5.5", "+6"];
       const levels = stdvLabels.map((label) => [label, label === "CE" ? firstDefined(payload.mid, payload.mean, payload.ce, payload.session_mid, payload.session_mean, payload.levels?.mid, payload.levels?.mean, payload.levels?.ce) : getNestedLevelValue(payload, label)]);
-      const tf = timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "5m");
-      const tfWeight = tf === "D" ? 1.7 : tf === "4H" ? 1.8 : tf === "1H" ? 1.45 : tf === "15m" ? 1.15 : 1;
-      const family = tf === "D" ? "Daily STDV" : tf === "4H" ? "4H STDV" : tf === "1H" ? "1H STDV" : tf === "15m" ? "15m STDV" : "5m Session STDV";
+      const tf = "5m";
+      const tfWeight = 1;
+      const family = "5m Session STDV";
       push(make(firstDefined(payload.session_high, payload.high, payload.range_high, payload.levels?.session_high), `${family} ${session} session high`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       push(make(firstDefined(payload.session_low, payload.low, payload.range_low, payload.levels?.session_low), `${family} ${session} session low`, "Both", `${family} Range`, 8 * tfWeight, "support"));
       levels.forEach(([name, value]) => {
@@ -2331,61 +2295,26 @@ const exportJournalCSV = () => {
     }
   };
 
-  const anchorPriceKey = (value) => {
-    const price = parsePrice(value);
-    return price === null ? "NA" : String(Math.round(price * 4) / 4);
-  };
-
-  const anchorBaseKey = (anchor) => {
-    const direction = String(anchor?.direction || "BOTH").toUpperCase();
-    const price = anchor?.entry ?? anchor?.price ?? anchor?.rawSignal?.entry ?? anchor?.rawSignal?.price;
-    return `${direction}|${anchorPriceKey(price)}`;
-  };
-
   const anchorSubmitKey = (anchor) => {
-    return `${anchorBaseKey(anchor)}|${String(anchor?.signal_id || anchor?.sourceId || anchor?.id || "")}`;
+    const direction = String(anchor?.direction || "BOTH").toUpperCase();
+    const price = parsePrice(anchor?.entry || anchor?.price || anchor?.rawSignal?.entry || anchor?.rawSignal?.price);
+    const priceKey = price === null ? "NA" : String(Math.round(price * 4) / 4);
+    return `${direction}|${priceKey}|${String(anchor?.signal_id || anchor?.sourceId || anchor?.id || "")}`;
   };
 
   const zoneSubmitKey = (zone) => {
-    return `${anchorBaseKey(zone)}|${String(zone?.sourceId || zone?.id || "")}`;
-  };
-
-  const anchorEvidenceSignature = (anchor) => {
-    const evidence = Array.isArray(anchor?.evidence) ? anchor.evidence : Array.isArray(anchor?.payload?.evidence) ? anchor.payload.evidence : [];
-    const sourceCount = Number(anchor?.sourceCount || evidence.length || 0);
-    const score = Number(anchor?.score || anchor?.zoneScore || anchor?.payload?.zone_score || 0);
-    const evidenceSig = evidence
-      .map((item) => `${item.sourceType || ""}:${item.label || ""}:${anchorPriceKey(item.price)}`)
-      .sort()
-      .join("|");
-    return { sourceCount, score, evidenceSig };
-  };
-
-  const submittedRecordForAnchor = (anchor) => {
-    const full = submittedAnchorKeys[anchorSubmitKey(anchor)];
-    const base = submittedAnchorKeys[`${anchorBaseKey(anchor)}|`];
-    return full || base || null;
-  };
-
-  const hasMeaningfulNewInfo = (zone, submittedRecord) => {
-    // Do not let a just-submitted/reported setup immediately rebuild itself.
-    // Same price + same direction stays hidden unless it becomes materially stronger.
-    if (!submittedRecord || submittedRecord === true) return false;
-    const sig = anchorEvidenceSignature(zone);
-    const oldSourceCount = Number(submittedRecord.sourceCount || 0);
-    const oldScore = Number(submittedRecord.score || 0);
-    const submittedAt = submittedRecord.submittedAt ? new Date(submittedRecord.submittedAt).getTime() : Date.now();
-    const minutesSinceSubmit = (Date.now() - submittedAt) / 60000;
-    if (minutesSinceSubmit < 30) return false;
-    return sig.sourceCount >= oldSourceCount + 2 && sig.score >= oldScore + 10;
+    const direction = String(zone?.direction || "BOTH").toUpperCase();
+    const price = parsePrice(zone?.price || zone?.entry);
+    const priceKey = price === null ? "NA" : String(Math.round(price * 4) / 4);
+    return `${direction}|${priceKey}|${String(zone?.sourceId || zone?.id || "")}`;
   };
 
   const submittedZoneMatches = (zone) => {
-    const submittedRecord = submittedRecordForAnchor(zone);
-    if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
-
+    if (submittedAnchorKeys[zoneSubmitKey(zone)]) return true;
     const zonePrice = parsePrice(zone?.price || zone?.entry);
     const zoneDirection = String(zone?.direction || "BOTH").toUpperCase();
+    const priceOnlyKey = `${zoneDirection}|${zonePrice === null ? "NA" : String(Math.round(zonePrice * 4) / 4)}|`;
+    if (submittedAnchorKeys[priceOnlyKey]) return true;
     return journal.some((j) => {
       if (isOpenOrder(j)) return false;
       const journalPrice = parsePrice(j.entry || j.entry_price);
@@ -2396,52 +2325,6 @@ const exportJournalCSV = () => {
       const signalMatches = journalSignalId && String(zone?.sourceId || "").includes(journalSignalId);
       return sameDirection && (samePrice || signalMatches);
     });
-  };
-
-  const markAnchorFilled = (anchor) => {
-    if (!anchor) return;
-    const key = anchorBaseKey(anchor);
-    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
-    setFilledAnchorKeys((prev) => ({
-      ...prev,
-      [key]: { filledAt: new Date().toISOString(), detail }
-    }));
-    setNotificationLog((prev) => [{
-      key: `FILLED-${key}-${Date.now()}`,
-      kind: "FILLED",
-      title: "Playmaker setup filled",
-      detail,
-      createdAt: new Date().toISOString()
-    }, ...prev].slice(0, 50));
-    notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
-  };
-
-  const dismissAnchorFromBoard = (anchor) => {
-    if (!anchor) return;
-    const submittedKey = anchorSubmitKey(anchor);
-    const submittedBaseKey = anchorBaseKey(anchor);
-    const priceOnlyKey = `${submittedBaseKey}|`;
-    const submittedRecord = {
-      submittedAt: new Date().toISOString(),
-      ...anchorEvidenceSignature(anchor)
-    };
-
-    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: submittedRecord, [priceOnlyKey]: submittedRecord }));
-    setFilledAnchorKeys((prev) => {
-      const next = { ...prev };
-      delete next[submittedBaseKey];
-      return next;
-    });
-
-    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • removed from board • ${formatEastern(new Date())}`;
-    setNotificationLog((prev) => [{
-      key: `DISMISSED-${submittedKey}-${Date.now()}`,
-      kind: "DISMISSED",
-      title: "Playmaker setup removed",
-      detail,
-      createdAt: new Date().toISOString()
-    }, ...prev].slice(0, 50));
-    notifyPlaymaker("Playmaker setup removed", detail, "play maker set up removed");
   };
 
   const submitAnchorToJournal = async (anchor) => {
@@ -2496,18 +2379,10 @@ const exportJournalCSV = () => {
     });
 
     const submittedKey = anchorSubmitKey(anchor);
-    const submittedBaseKey = anchorBaseKey(anchor);
-    const priceOnlyKey = `${submittedBaseKey}|`;
-    const submittedRecord = {
-      submittedAt: new Date().toISOString(),
-      ...anchorEvidenceSignature(anchor)
-    };
-    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: submittedRecord, [priceOnlyKey]: submittedRecord }));
-    setFilledAnchorKeys((prev) => {
-      const next = { ...prev };
-      delete next[submittedBaseKey];
-      return next;
-    });
+    const submittedPrice = parsePrice(entryValue);
+    const submittedDirection = String(directionValue || "BOTH").toUpperCase();
+    const priceOnlyKey = `${submittedDirection}|${submittedPrice === null ? "NA" : String(Math.round(submittedPrice * 4) / 4)}|`;
+    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: true, [priceOnlyKey]: true }));
 
     const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} • Grade ${item.grade} • Sources ${anchor.sourceCount || anchor.evidence?.length || 0} • submitted to journal • ${formatEastern(new Date())}`;
     setNotificationLog((prev) => [{
@@ -2684,8 +2559,7 @@ const exportJournalCSV = () => {
       return `${direction}|${price === null ? "NA" : Math.round(price * 4) / 4}`;
     };
 
-    const notifyEligibleAnchors = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
-    const currentAnchorMap = new Map(notifyEligibleAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
+    const currentAnchorMap = new Map(activeAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
     const priorAnchorMap = previousAnchorMapRef.current instanceof Map ? previousAnchorMapRef.current : new Map();
     const newNotices = [];
 
@@ -2720,7 +2594,6 @@ const exportJournalCSV = () => {
 
     priorAnchorMap.forEach((oldAnchor, anchorKey) => {
       if (currentAnchorMap.has(anchorKey)) return;
-      if (submittedAnchorKeys[`${anchorKey}|`] || submittedAnchorKeys[anchorSubmitKey(oldAnchor)]) return;
       const directionText = String(oldAnchor.direction || "BOTH").toUpperCase();
       const priceText = fmtPrice(oldAnchor.entry || oldAnchor.price);
       const gradeText = oldAnchor.grade || "Setup";
@@ -2739,7 +2612,7 @@ const exportJournalCSV = () => {
     }
 
     previousAnchorMapRef.current = currentAnchorMap;
-  }, [activeAnchors, seenNotificationKeys, submittedAnchorKeys]);
+  }, [activeAnchors, seenNotificationKeys]);
 
 
   const learningStats = useMemo(() => {
@@ -2983,12 +2856,12 @@ const exportJournalCSV = () => {
               <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review / Report</button>
             </div>
 
-            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
-            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
-            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
+            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
+            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
 
             {unfilledOrders.length > 0 && (
-              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} />
             )}
           </div>
         )}
@@ -3361,15 +3234,13 @@ function EvidenceList({ evidence = [] }) {
   );
 }
 
-function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor }) {
+function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor }) {
   const isAi = anchor.sourceType === "AI Signal";
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
   const verification = anchor.verification || verifiedAnchors[verificationKey] || null;
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
-  const filledKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
-  const filledRecord = filledAnchorKeys[filledKey] || null;
   const [draftOwnerNote, setDraftOwnerNote] = useState(verification?.ownerNote || "");
   useEffect(() => {
     setDraftOwnerNote(verification?.ownerNote || "");
@@ -3385,7 +3256,6 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         </span>
         {isAi && <span className="rounded-full border border-zinc-700 px-3 py-1 text-xs font-black text-zinc-300">Sources {anchor.sourceCount || evidence.length || 0}</span>}
         {verifiedLabel && <span className="rounded-full border border-[#00d27a] bg-[#001a0f] px-3 py-1 text-xs font-black text-[#00d27a]">{verifiedLabel}</span>}
-        {filledRecord && <span className="rounded-full border border-[#ffcc19] bg-[#171200] px-3 py-1 text-xs font-black text-[#ffcc19]">FILLED — JOURNAL NEEDED</span>}
       </div>
 
       <div className="text-xl font-black text-[#00d27a]">
@@ -3443,24 +3313,12 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         </div>
       )}
 
-      <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={() => onMarkFilled?.(anchor)}
-          className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
-        >
-          Mark Filled — Keep On Board
-        </button>
+      <div className="mt-3" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={() => onSubmitAnchor?.(anchor)}
           className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
         >
           Submit / Report to Journal
-        </button>
-        <button
-          onClick={() => onDismissAnchor?.(anchor)}
-          className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
-        >
-          Remove From Board
         </button>
       </div>
 
@@ -3469,7 +3327,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   );
 }
 
-function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor }) {
+function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor }) {
   if (!items.length) return null;
   return (
     <div className="mt-5">
@@ -3479,7 +3337,7 @@ function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ow
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {items.map((anchor) => (
-          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} onDismissAnchor={onDismissAnchor} />
+          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} />
         ))}
       </div>
     </div>
