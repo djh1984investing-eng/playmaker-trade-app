@@ -421,6 +421,69 @@ useEffect(() => {
   const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
+  const previousAnchorMapRef = useRef(new Map());
+  const notificationAudioRef = useRef(null);
+
+  const requestDesktopNotifications = async () => {
+    if (typeof window === "undefined") return;
+    try {
+      if ("Notification" in window && Notification.permission === "default") {
+        await Notification.requestPermission();
+      }
+    } catch (_err) {}
+
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (AudioContextClass && !notificationAudioRef.current) {
+        notificationAudioRef.current = new AudioContextClass();
+      }
+    } catch (_err) {}
+  };
+
+  const playNotificationSound = () => {
+    if (typeof window === "undefined") return;
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const ctx = notificationAudioRef.current || (AudioContextClass ? new AudioContextClass() : null);
+      if (!ctx) return;
+      notificationAudioRef.current = ctx;
+      if (ctx.state === "suspended") ctx.resume();
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.001, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (_err) {}
+  };
+
+  const notifyPlaymaker = (title, detail, voiceText) => {
+    playNotificationSound();
+
+    try {
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body: detail });
+      }
+    } catch (_err) {}
+
+    try {
+      if (typeof window !== "undefined" && "speechSynthesis" in window && voiceText) {
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance(voiceText);
+        msg.rate = 0.95;
+        msg.pitch = 1;
+        window.speechSynthesis.speak(msg);
+      }
+    } catch (_err) {}
+  };
+
+
   const ownerMode = isOwnerUser(user);
   const [accessStatus, setAccessStatus] = useState("checking");
   const [accessMessage, setAccessMessage] = useState("");
