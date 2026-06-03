@@ -2434,10 +2434,36 @@ const exportJournalCSV = () => {
   const markAnchorFilled = (anchor) => {
     if (!anchor) return;
     const key = anchorBaseKey(anchor);
-    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
+    const entryValue = anchor.entry ?? anchor.price ?? anchor.rawSignal?.entry ?? anchor.rawSignal?.price ?? "";
+    const directionValue = anchor.direction || anchor.rawSignal?.direction || "Both";
+    const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
+
+    // Store the FULL order card, not just a filled flag.
+    // This pins the exact setup on the board even if the scanner rebuilds, refreshes,
+    // or the live confluence list temporarily changes. It only leaves after journal/report.
+    const anchorSnapshot = {
+      ...anchor,
+      id: anchor.id || `filled-${key}-${Date.now()}`,
+      entry: entryValue,
+      price: entryValue,
+      direction: directionValue,
+      result: "Unfilled",
+      orderStatus: "Filled - Journal Needed",
+      pendingOrder: true,
+      filledLocked: true,
+      filledAt: new Date().toISOString(),
+      sourceType: anchor.sourceType || "AI Signal",
+      rawSignal: anchor.rawSignal || anchor.payload || {},
+      evidence: anchor.evidence || anchor.rawSignal?.evidence || anchor.payload?.evidence || []
+    };
+
     setFilledAnchorKeys((prev) => ({
       ...prev,
-      [key]: { filledAt: new Date().toISOString(), detail }
+      [key]: {
+        filledAt: new Date().toISOString(),
+        detail,
+        anchorSnapshot
+      }
     }));
     setNotificationLog((prev) => [{
       key: `FILLED-${key}-${Date.now()}`,
@@ -2612,13 +2638,26 @@ const exportJournalCSV = () => {
     .filter((order) => !submittedRecordForAnchor(order))
     .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes));
 
+  const filledPinnedAnchors = Object.values(filledAnchorKeys)
+    .map((record) => record?.anchorSnapshot)
+    .filter(Boolean)
+    .filter((anchor) => !submittedRecordForAnchor(anchor));
+
   const rawActiveAnchors = [
-    ...boardUnfilledOrders.map((order) => ({
+    ...filledPinnedAnchors,
+    ...boardUnfilledOrders
+      .filter((order) => !filledPinnedAnchors.some((filled) => anchorBaseKey(filled) === anchorBaseKey(order)))
+      .map((order) => ({
       ...order,
       sourceType: order.sourceType || "Manual Order"
     })),
     ...rankedAiLimitZones
       .filter((zone) => !submittedZoneMatches(zone))
+      .filter((zone) => !filledPinnedAnchors.some((filled) => {
+        const filledPrice = parsePrice(filled.entry || filled.price);
+        const sameDirection = String(filled.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
+        return filledPrice !== null && sameDirection && Math.abs(filledPrice - zone.price) <= Math.max(2, Math.min(levelMergeTolerance, zone.clusterWidth || levelMergeTolerance));
+      }))
       .filter((zone) => !unfilledOrders.some((order) => {
         const orderEntry = parsePrice(order.entry || order.entry_price);
         const sameDirection = String(order.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
