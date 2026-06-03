@@ -2375,6 +2375,31 @@ const exportJournalCSV = () => {
     return full || base || null;
   };
 
+  const markAnchorHiddenNow = (anchor) => {
+    if (!anchor) return;
+    const submittedKey = anchorSubmitKey(anchor);
+    const submittedBaseKey = anchorBaseKey(anchor);
+    const priceOnlyKey = `${submittedBaseKey}|`;
+    const submittedRecord = {
+      submittedAt: new Date().toISOString(),
+      ...anchorEvidenceSignature(anchor)
+    };
+
+    setSubmittedAnchorKeys((prev) => ({
+      ...prev,
+      [submittedKey]: submittedRecord,
+      [priceOnlyKey]: submittedRecord
+    }));
+
+    setFilledAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[submittedBaseKey];
+      return next;
+    });
+
+    return { submittedKey, submittedBaseKey, priceOnlyKey, submittedRecord };
+  };
+
   const hasMeaningfulNewInfo = (zone, submittedRecord) => {
     // Do not let a just-submitted/reported setup immediately rebuild itself.
     // Same price + same direction stays hidden unless it becomes materially stronger.
@@ -2424,22 +2449,27 @@ const exportJournalCSV = () => {
     notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
   };
 
-  const dismissAnchorFromBoard = (anchor) => {
+  const dismissAnchorFromBoard = async (anchor) => {
     if (!anchor) return;
-    const submittedKey = anchorSubmitKey(anchor);
-    const submittedBaseKey = anchorBaseKey(anchor);
-    const priceOnlyKey = `${submittedBaseKey}|`;
-    const submittedRecord = {
-      submittedAt: new Date().toISOString(),
-      ...anchorEvidenceSignature(anchor)
-    };
+    const hidden = markAnchorHiddenNow(anchor);
+    const submittedKey = hidden?.submittedKey || anchorSubmitKey(anchor);
 
-    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: submittedRecord, [priceOnlyKey]: submittedRecord }));
-    setFilledAnchorKeys((prev) => {
-      const next = { ...prev };
-      delete next[submittedBaseKey];
-      return next;
-    });
+    // Manual orders live in the journal table as open orders. Removing from board
+    // must also remove/close that local row so it does not keep showing as a manual order.
+    if (anchor.sourceType !== "AI Signal") {
+      setJournal((prev) => prev.filter((item) => String(item.id) !== String(anchor.id)));
+      if (user && anchor.id && !String(anchor.id).startsWith("reported-") && !String(anchor.id).startsWith("ai-") && !String(anchor.id).startsWith("zone-")) {
+        try {
+          await supabase
+            .from("trade_journal")
+            .update({ result: "Cancelled" })
+            .eq("id", anchor.id)
+            .eq("user_id", user.id);
+        } catch (err) {
+          console.error("Manual order remove error:", err);
+        }
+      }
+    }
 
     const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • removed from board • ${formatEastern(new Date())}`;
     setNotificationLog((prev) => [{
@@ -2454,6 +2484,10 @@ const exportJournalCSV = () => {
 
   const submitAnchorToJournal = async (anchor) => {
     if (!anchor) return;
+
+    // Hide it immediately before the database round trip so the same card cannot
+    // rebuild on the board while Supabase is saving.
+    const hidden = markAnchorHiddenNow(anchor);
 
     const payload = anchor.rawSignal || anchor.payload || {};
     const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
@@ -2503,19 +2537,7 @@ const exportJournalCSV = () => {
       return [savedItem, ...withoutDuplicates];
     });
 
-    const submittedKey = anchorSubmitKey(anchor);
-    const submittedBaseKey = anchorBaseKey(anchor);
-    const priceOnlyKey = `${submittedBaseKey}|`;
-    const submittedRecord = {
-      submittedAt: new Date().toISOString(),
-      ...anchorEvidenceSignature(anchor)
-    };
-    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: submittedRecord, [priceOnlyKey]: submittedRecord }));
-    setFilledAnchorKeys((prev) => {
-      const next = { ...prev };
-      delete next[submittedBaseKey];
-      return next;
-    });
+    const submittedKey = hidden?.submittedKey || anchorSubmitKey(anchor);
 
     const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} • Grade ${item.grade} • Sources ${anchor.sourceCount || anchor.evidence?.length || 0} • submitted to journal • ${formatEastern(new Date())}`;
     setNotificationLog((prev) => [{
@@ -2527,14 +2549,8 @@ const exportJournalCSV = () => {
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup submitted", detail, "play maker setup submitted");
 
-    setSelectedTrade(savedItem);
-    setForm((f) => ({
-      ...f,
-      tradeEntryPrice: String(savedItem.entry || ""),
-      direction: savedItem.direction || f.direction,
-      result: "Reported",
-      notes: savedItem.notes || ""
-    }));
+    setSelectedTrade(null);
+    clearTradeForm();
     setTab("journal");
   };
 
@@ -2592,8 +2608,12 @@ const exportJournalCSV = () => {
   const selectedLvnEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("LVN"));
   const selectedEntryIsCrown = ["A+", "A"].includes(selectedTrade?.grade);
 
+  const boardUnfilledOrders = unfilledOrders
+    .filter((order) => !submittedRecordForAnchor(order))
+    .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes));
+
   const rawActiveAnchors = [
-    ...unfilledOrders.map((order) => ({
+    ...boardUnfilledOrders.map((order) => ({
       ...order,
       sourceType: order.sourceType || "Manual Order"
     })),
@@ -2995,8 +3015,8 @@ const exportJournalCSV = () => {
             <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
 
-            {unfilledOrders.length > 0 && (
-              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            {boardUnfilledOrders.length > 0 && (
+              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={boardUnfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             )}
           </div>
         )}
