@@ -589,6 +589,32 @@ useEffect(() => {
   }, [submittedAnchorKeys]);
 
   useEffect(() => {
+    // Rebuild hidden/submitted anchor keys from reported/closed journal rows.
+    // This stops a submitted setup from returning after refresh/deploy.
+    setSubmittedAnchorKeys((prev) => {
+      const next = { ...prev };
+      journal.forEach((item) => {
+        if (isOpenOrder(item)) return;
+        const direction = String(item.direction || "BOTH").toUpperCase();
+        const price = parsePrice(item.entry || item.entry_price);
+        if (price === null) return;
+        const baseKey = `${direction}|${String(Math.round(price * 4) / 4)}|`;
+        if (!next[baseKey]) {
+          next[baseKey] = {
+            submittedAt: item.date || new Date().toISOString(),
+            sourceCount: Number(item.sourceCount || item.evidence?.length || 0),
+            score: Number(item.score || 0),
+            evidenceSig: Array.isArray(item.evidence)
+              ? item.evidence.map((ev) => `${ev.sourceType || ""}:${ev.label || ""}:${anchorPriceKey(ev.price)}`).sort().join("|")
+              : ""
+          };
+        }
+      });
+      return next;
+    });
+  }, [journal]);
+
+  useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("playmaker_filled_anchor_keys") || "{}");
       if (saved && typeof saved === "object") setFilledAnchorKeys(saved);
@@ -972,7 +998,7 @@ useEffect(() => {
 
   // Scanner input should include all fetched TradingView level rows.
   // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
-  const scannerAiSignals = aiSignals;
+  const scannerAiSignals = aiSignals.filter((signal) => !isGenericPriceAlertSignal(signal));
 
 
   const getSignalPayload = (signal) => ({
@@ -2342,12 +2368,16 @@ const exportJournalCSV = () => {
   };
 
   const hasMeaningfulNewInfo = (zone, submittedRecord) => {
+    // Do not let a just-submitted/reported setup immediately rebuild itself.
+    // Same price + same direction stays hidden unless it becomes materially stronger.
     if (!submittedRecord || submittedRecord === true) return false;
     const sig = anchorEvidenceSignature(zone);
     const oldSourceCount = Number(submittedRecord.sourceCount || 0);
     const oldScore = Number(submittedRecord.score || 0);
-    const oldEvidenceSig = String(submittedRecord.evidenceSig || "");
-    return sig.sourceCount > oldSourceCount || sig.score >= oldScore + 5 || (oldEvidenceSig && sig.evidenceSig && sig.evidenceSig !== oldEvidenceSig && sig.sourceCount >= oldSourceCount + 1);
+    const submittedAt = submittedRecord.submittedAt ? new Date(submittedRecord.submittedAt).getTime() : Date.now();
+    const minutesSinceSubmit = (Date.now() - submittedAt) / 60000;
+    if (minutesSinceSubmit < 30) return false;
+    return sig.sourceCount >= oldSourceCount + 2 && sig.score >= oldScore + 10;
   };
 
   const submittedZoneMatches = (zone) => {
@@ -2384,6 +2414,34 @@ const exportJournalCSV = () => {
       createdAt: new Date().toISOString()
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
+  };
+
+  const dismissAnchorFromBoard = (anchor) => {
+    if (!anchor) return;
+    const submittedKey = anchorSubmitKey(anchor);
+    const submittedBaseKey = anchorBaseKey(anchor);
+    const priceOnlyKey = `${submittedBaseKey}|`;
+    const submittedRecord = {
+      submittedAt: new Date().toISOString(),
+      ...anchorEvidenceSignature(anchor)
+    };
+
+    setSubmittedAnchorKeys((prev) => ({ ...prev, [submittedKey]: submittedRecord, [priceOnlyKey]: submittedRecord }));
+    setFilledAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[submittedBaseKey];
+      return next;
+    });
+
+    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • removed from board • ${formatEastern(new Date())}`;
+    setNotificationLog((prev) => [{
+      key: `DISMISSED-${submittedKey}-${Date.now()}`,
+      kind: "DISMISSED",
+      title: "Playmaker setup removed",
+      detail,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+    notifyPlaymaker("Playmaker setup removed", detail, "play maker set up removed");
   };
 
   const submitAnchorToJournal = async (anchor) => {
@@ -2925,12 +2983,12 @@ const exportJournalCSV = () => {
               <button onClick={() => setTab("journal")} className="rounded-xl bg-[#ffcc19] px-4 py-2 font-black text-black">Review / Report</button>
             </div>
 
-            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
-            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
-            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
+            <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
 
             {unfilledOrders.length > 0 && (
-              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} />
+              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={unfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             )}
           </div>
         )}
@@ -3303,7 +3361,7 @@ function EvidenceList({ evidence = [] }) {
   );
 }
 
-function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled }) {
+function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor }) {
   const isAi = anchor.sourceType === "AI Signal";
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
@@ -3398,6 +3456,12 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         >
           Submit / Report to Journal
         </button>
+        <button
+          onClick={() => onDismissAnchor?.(anchor)}
+          className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
+        >
+          Remove From Board
+        </button>
       </div>
 
       {isAi && <EvidenceList evidence={evidence} />}
@@ -3405,7 +3469,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   );
 }
 
-function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled }) {
+function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor }) {
   if (!items.length) return null;
   return (
     <div className="mt-5">
@@ -3415,7 +3479,7 @@ function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ow
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {items.map((anchor) => (
-          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} />
+          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} onDismissAnchor={onDismissAnchor} />
         ))}
       </div>
     </div>
@@ -3599,22 +3663,4 @@ function Journal({ journal, journalStats, saveTrade, editTrade, exportJournalCSV
 
 function Behavior({ behavior, journal, learningStats = [] }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Behavior Rating</Title><div className="mt-6 text-7xl font-black text-[#00d27a]">{behavior.score}/10</div><p className="mt-3 text-zinc-300">Based on saved results and notes. Notes mentioning chasing/late reduce behavior score. Notes mentioning patience/followed plan improve it.</p><div className="mt-5 grid grid-cols-4 gap-3"><Small label="Trades" value={behavior.total} /><Small label="Wins" value={behavior.wins} /><Small label="Losses" value={behavior.losses} /><Small label="BE" value={behavior.be} /></div></Card><Card><Title>Private AI Result Learning</Title><p className="mt-2 text-sm text-zinc-400">Only your logged-in account sees this. It calculates which source families and repeat-level combinations are working from your saved results.</p><div className="mt-4 space-y-3">{learningStats.slice(0,8).map((row) => <div key={row.name} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between gap-3"><b className="text-[#ffcc19]">{row.name}</b><span className="font-black text-[#00d27a]">{row.winRate}%</span></div><div className="mt-1 text-xs text-zinc-500">Trades {row.trades} • Wins {row.wins} • Losses {row.losses} • BE {row.be} • 200+ moves {row.bigMove200 || 0} • Avg move {fmt(row.avgMaxMove)} • Avg DD {fmt(row.avgDrawdown)}</div></div>)}{learningStats.length === 0 && <div className="text-zinc-500">Save completed trade results to populate AI learning stats.</div>}</div></Card><Card className="lg:col-span-2"><Title>Behavior Notes</Title><div className="mt-4 space-y-3">{journal.slice(0,5).map((j) => <div key={j.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><b>{j.result}</b><p className="mt-1 text-zinc-400">{j.notes || "No notes"}</p></div>)}{journal.length === 0 && <div className="text-zinc-500">Save journal results to populate behavior reports.</div>}</div></Card></div>;
-}// PLAYMAKER CHANGE GUARD:
-// Protected: page/tab layout, journal submit/report flow, TradingView signal intake, scoring weights,
-// Whop/access behavior, and manual weekly/crater scanner inputs.
-// Current guardrails:
-// - Weekly/manual/crater confluence only counts and displays within 15 points.
-// - SESSION_DEVIATION is 5m-only.
-// - Scanner Feed Audit is owner-only inside AI Settings.
-// - Every AI/manual anchor has exactly one submit/report button and leaves the board after submission.
-// - Duplicate same-price/same-direction anchors are merged.
-// - Owner verification notes are editable only by owner and visible to customers.
-// - Notifications include price/direction/grade/sources/Eastern time plus popup, sound, and voice when allowed.
-  const isGenericPriceAlertSignal = (signal) => {
-    const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
-    const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal.signal, "") || "").toUpperCase();
-    const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
-    return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
-  };
-
-
+}
