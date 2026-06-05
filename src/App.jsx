@@ -1329,10 +1329,87 @@ useEffect(() => {
       });
     }
 
-    if (type.includes("CONFLUENCE")) {
-      const price = firstDefined(payload.confluence_price, payload.htf_confluence_price, payload.price, payload.trigger_price);
-      const count = n(firstDefined(payload.confluence_count, payload.matches, payload.count, payload.htfConfluenceCount), 1);
-      push(make(price, `PlayMaker confluence ${payload.sources || payload.confluence_sources || payload.matches || ""}`.trim(), payload.direction, "PlayMaker Confluence", 26 + Math.min(24, count * 6), "major"));
+    if (type.includes("CONFLUENCE") || type.includes("PLAYMAKER")) {
+      const centerPrice = firstDefined(
+        payload.confluence_center,
+        payload.cluster_center,
+        payload.confluence_price,
+        payload.htf_confluence_price,
+        payload.price,
+        payload.trigger_price
+      );
+
+      const rawSources = firstDefined(
+        payload.confluence_levels,
+        payload.playmaker_levels,
+        payload.source_levels,
+        payload.level_prices,
+        payload.levels_detail,
+        []
+      );
+
+      const parsedSourceLevels = Array.isArray(rawSources)
+        ? rawSources
+        : typeof rawSources === "string"
+          ? (() => {
+              try {
+                const parsed = JSON.parse(rawSources);
+                return Array.isArray(parsed) ? parsed : [];
+              } catch (_err) {
+                return rawSources.split(",").map((part) => {
+                  const [label, price] = part.split(":").map((x) => String(x || "").trim());
+                  return { label, source: label, price };
+                });
+              }
+            })()
+          : [];
+
+      const sourceText = String(firstDefined(payload.sources, payload.confluence_sources, payload.matches, "") || "");
+      const count = n(firstDefined(payload.confluence_count, payload.matches, payload.count, payload.htfConfluenceCount, parsedSourceLevels.length), 1);
+      const baseScore = 26 + Math.min(24, count * 6);
+
+      // Always count the PlayMaker alert itself as a major confluence source.
+      push(make(
+        centerPrice,
+        `PlayMaker confluence center ${sourceText}`.trim(),
+        payload.direction,
+        "PlayMaker Confluence",
+        baseScore,
+        "major"
+      ));
+
+      // Also unpack each individual PlayMaker confluence level when the alert sends them.
+      // This is what makes D:-1, W:0.5, etc. appear in the order-card source list.
+      parsedSourceLevels.forEach((level, idx) => {
+        const label = firstDefined(level.label, level.source, level.name, level.tf, `source ${idx + 1}`);
+        const price = firstDefined(level.price, level.value, level.level, level.confluence_price);
+        push(make(
+          price,
+          `PlayMaker ${label}`,
+          firstDefined(level.direction, payload.direction, "Both"),
+          "PlayMaker Confluence",
+          Math.max(18, Math.round(baseScore / 2)),
+          "major"
+        ));
+      });
+
+      // Backward-compatible unpacking for flat payloads like d_neg_1_price or w_0_5.
+      Object.entries(payload || {}).forEach(([key, value]) => {
+        const lower = String(key).toLowerCase();
+        const looksLikePlaymakerLevel =
+          (lower.startsWith("pm_") || lower.startsWith("playmaker_") || lower.startsWith("confluence_")) &&
+          (lower.includes("level") || lower.includes("price")) &&
+          !["confluence_price", "confluence_center"].includes(lower);
+        if (!looksLikePlaymakerLevel) return;
+        push(make(
+          value,
+          `PlayMaker ${key.replace(/^pm_|^playmaker_|^confluence_/i, "").replace(/_/g, " ")}`,
+          payload.direction || "Both",
+          "PlayMaker Confluence",
+          Math.max(18, Math.round(baseScore / 2)),
+          "major"
+        ));
+      });
     }
 
     if (type.includes("ORDER_BLOCK") || type.includes("ORDER BLOCK")) {
