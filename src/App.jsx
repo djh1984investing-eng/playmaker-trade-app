@@ -1,5 +1,4 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
-import html2canvas from "html2canvas";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
@@ -3519,22 +3518,187 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   const [draftOwnerNote, setDraftOwnerNote] = useState(verification?.ownerNote || "");
 
   const downloadCardScreenshot = async () => {
-    if (!cardRef.current) return;
     try {
-      const canvas = await html2canvas(cardRef.current, {
-        backgroundColor: "#090909",
-        scale: 2,
-        useCORS: true
-      });
-      const link = document.createElement("a");
       const direction = String(anchor.direction || "BOTH").toUpperCase();
-      const price = String(anchor.entry || anchor.price || "setup").replace(/[^0-9.\-]/g, "");
+      const entryValue = anchor.entry || anchor.price || "";
+      const gradeText = String(anchor.grade || "SETUP").toUpperCase();
+      const sourceCount = anchor.sourceCount || evidence.length || 0;
+      const zoneScore = anchor.zoneScore || anchor.score || "--";
+      const precisionScore = anchor.precisionScore || "--";
+      const title = `${direction} SETUP`;
+      const entryText = fmtPrice(entryValue);
+      const clusterText = anchor.clusterWidth !== undefined
+        ? `Cluster ${fmtPrice(anchor.clusterLow)} - ${fmtPrice(anchor.clusterHigh)} | Width ${fmt(anchor.clusterWidth)} pts`
+        : (anchor.top || "PlayMaker setup card");
+      const topEvidence = evidence.slice(0, 7).map((item) => `• ${item.label || item.sourceType} @ ${fmtPrice(item.price)}`);
+      const stopLines = Array.isArray(anchor.stopPlans)
+        ? anchor.stopPlans.slice(0, 3).map((plan) => `${plan.stop}pt: Limit ${fmtPrice(plan.limit)} | Stop ${fmtPrice(plan.stopArea)}${plan.valid === false ? " | Too tight" : ""}`)
+        : [];
+
+      const canvas = document.createElement("canvas");
+      const width = 1080;
+      const height = 1350;
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = width * ratio;
+      canvas.height = height * ratio;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas is not available in this browser.");
+      ctx.scale(ratio, ratio);
+
+      const drawRoundRect = (x, y, w, h, r) => {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+      };
+
+      const fillRoundRect = (x, y, w, h, r, fill, stroke = null) => {
+        drawRoundRect(x, y, w, h, r);
+        ctx.fillStyle = fill;
+        ctx.fill();
+        if (stroke) {
+          ctx.strokeStyle = stroke;
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+      };
+
+      const wrapText = (txt, x, y, maxWidth, lineHeight, maxLines = 3, color = "#d4d4d8", font = "28px Arial") => {
+        ctx.fillStyle = color;
+        ctx.font = font;
+        const words = String(txt || "").split(" ");
+        let line = "";
+        let lines = 0;
+        for (let i = 0; i < words.length; i += 1) {
+          const testLine = line ? `${line} ${words[i]}` : words[i];
+          if (ctx.measureText(testLine).width > maxWidth && line) {
+            ctx.fillText(line, x, y);
+            y += lineHeight;
+            lines += 1;
+            line = words[i];
+            if (lines >= maxLines - 1) {
+              const remaining = [line, ...words.slice(i + 1)].join(" ");
+              let clipped = remaining;
+              while (ctx.measureText(`${clipped}...`).width > maxWidth && clipped.length > 0) {
+                clipped = clipped.slice(0, -1);
+              }
+              ctx.fillText(`${clipped}...`, x, y);
+              return y + lineHeight;
+            }
+          } else {
+            line = testLine;
+          }
+        }
+        if (line) ctx.fillText(line, x, y);
+        return y + lineHeight;
+      };
+
+      ctx.fillStyle = "#080808";
+      ctx.fillRect(0, 0, width, height);
+
+      fillRoundRect(54, 54, 972, 1242, 34, "#090909", "#ffcc19");
+
+      ctx.fillStyle = "#ffcc19";
+      ctx.font = "900 34px Arial";
+      ctx.fillText("👑 THE PLAYMAKER", 92, 124);
+
+      fillRoundRect(780, 86, 180, 86, 24, "#ffcc19");
+      ctx.fillStyle = "#080808";
+      ctx.font = "900 52px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText(gradeText, 870, 146);
+      ctx.textAlign = "left";
+
+      ctx.fillStyle = "#00d27a";
+      ctx.font = "900 66px Arial";
+      ctx.fillText(title, 92, 236);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "900 92px Arial";
+      ctx.fillText(entryText, 92, 340);
+
+      ctx.fillStyle = "#a1a1aa";
+      ctx.font = "28px Arial";
+      ctx.fillText(`Zone ${zoneScore}/100   |   Precision ${precisionScore}/100   |   Sources ${sourceCount}`, 92, 398);
+
+      fillRoundRect(92, 442, 896, 132, 22, "#111111", "#2c2300");
+      ctx.fillStyle = "#ffcc19";
+      ctx.font = "900 28px Arial";
+      ctx.fillText("ENTRY STACK", 122, 488);
+      wrapText(clusterText, 122, 530, 830, 34, 2, "#e4e4e7", "28px Arial");
+
+      let y = 640;
+      ctx.fillStyle = "#ffcc19";
+      ctx.font = "900 30px Arial";
+      ctx.fillText("STOP PLAN", 92, y);
+      y += 42;
+
+      if (stopLines.length) {
+        stopLines.forEach((line) => {
+          fillRoundRect(92, y - 30, 896, 48, 14, "#0f0f0f", "#27272a");
+          ctx.fillStyle = "#e4e4e7";
+          ctx.font = "24px Arial";
+          ctx.fillText(line, 116, y);
+          y += 64;
+        });
+      } else {
+        ctx.fillStyle = "#a1a1aa";
+        ctx.font = "24px Arial";
+        ctx.fillText("No stop plan saved on this card.", 92, y);
+        y += 60;
+      }
+
+      y += 20;
+      ctx.fillStyle = "#ffcc19";
+      ctx.font = "900 30px Arial";
+      ctx.fillText("CONFLUENCES", 92, y);
+      y += 48;
+
+      if (topEvidence.length) {
+        topEvidence.forEach((line) => {
+          y = wrapText(line, 92, y, 896, 34, 2, "#d4d4d8", "24px Arial") + 8;
+        });
+      } else {
+        ctx.fillStyle = "#a1a1aa";
+        ctx.font = "24px Arial";
+        ctx.fillText("No source breakdown saved.", 92, y);
+        y += 38;
+      }
+
+      y = Math.min(y + 24, 1180);
+      ctx.strokeStyle = "#2c2300";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(92, 1198);
+      ctx.lineTo(988, 1198);
+      ctx.stroke();
+
+      ctx.fillStyle = "#a1a1aa";
+      ctx.font = "22px Arial";
+      ctx.fillText(`Created: ${anchor.date || "--"}${anchor.updatedAt ? ` | Updated: ${anchor.updatedAt}` : ""}`, 92, 1242);
+
+      ctx.fillStyle = "#ffcc19";
+      ctx.font = "900 24px Arial";
+      ctx.fillText("PlayMaker Setup Grader", 92, 1278);
+
+      const link = document.createElement("a");
+      const price = String(entryValue || "setup").replace(/[^0-9.\-]/g, "");
       link.download = `playmaker-${direction}-${price || "setup"}-${Date.now()}.png`;
       link.href = canvas.toDataURL("image/png");
       link.click();
     } catch (err) {
-      console.error("Playmaker card screenshot error:", err);
-      alert("Screenshot failed. Make sure html2canvas is installed, then rebuild.");
+      console.error("Playmaker social card screenshot error:", err);
+      alert(`Screenshot failed: ${err?.message || err}`);
     }
   };
 
