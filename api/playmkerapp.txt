@@ -1,5 +1,4 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
-import html2canvas from "html2canvas";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
 const GREEN = "#00d27a";
@@ -1330,87 +1329,10 @@ useEffect(() => {
       });
     }
 
-    if (type.includes("CONFLUENCE") || type.includes("PLAYMAKER")) {
-      const centerPrice = firstDefined(
-        payload.confluence_center,
-        payload.cluster_center,
-        payload.confluence_price,
-        payload.htf_confluence_price,
-        payload.price,
-        payload.trigger_price
-      );
-
-      const rawSources = firstDefined(
-        payload.confluence_levels,
-        payload.playmaker_levels,
-        payload.source_levels,
-        payload.level_prices,
-        payload.levels_detail,
-        []
-      );
-
-      const parsedSourceLevels = Array.isArray(rawSources)
-        ? rawSources
-        : typeof rawSources === "string"
-          ? (() => {
-              try {
-                const parsed = JSON.parse(rawSources);
-                return Array.isArray(parsed) ? parsed : [];
-              } catch (_err) {
-                return rawSources.split(",").map((part) => {
-                  const [label, price] = part.split(":").map((x) => String(x || "").trim());
-                  return { label, source: label, price };
-                });
-              }
-            })()
-          : [];
-
-      const sourceText = String(firstDefined(payload.sources, payload.confluence_sources, payload.matches, "") || "");
-      const count = n(firstDefined(payload.confluence_count, payload.matches, payload.count, payload.htfConfluenceCount, parsedSourceLevels.length), 1);
-      const baseScore = 26 + Math.min(24, count * 6);
-
-      // Always count the PlayMaker alert itself as a major confluence source.
-      push(make(
-        centerPrice,
-        `PlayMaker confluence center ${sourceText}`.trim(),
-        payload.direction,
-        "PlayMaker Confluence",
-        baseScore,
-        "major"
-      ));
-
-      // Also unpack each individual PlayMaker confluence level when the alert sends them.
-      // This is what makes D:-1, W:0.5, etc. appear in the order-card source list.
-      parsedSourceLevels.forEach((level, idx) => {
-        const label = firstDefined(level.label, level.source, level.name, level.tf, `source ${idx + 1}`);
-        const price = firstDefined(level.price, level.value, level.level, level.confluence_price);
-        push(make(
-          price,
-          `PlayMaker ${label}`,
-          firstDefined(level.direction, payload.direction, "Both"),
-          "PlayMaker Confluence",
-          Math.max(18, Math.round(baseScore / 2)),
-          "major"
-        ));
-      });
-
-      // Backward-compatible unpacking for flat payloads like d_neg_1_price or w_0_5.
-      Object.entries(payload || {}).forEach(([key, value]) => {
-        const lower = String(key).toLowerCase();
-        const looksLikePlaymakerLevel =
-          (lower.startsWith("pm_") || lower.startsWith("playmaker_") || lower.startsWith("confluence_")) &&
-          (lower.includes("level") || lower.includes("price")) &&
-          !["confluence_price", "confluence_center"].includes(lower);
-        if (!looksLikePlaymakerLevel) return;
-        push(make(
-          value,
-          `PlayMaker ${key.replace(/^pm_|^playmaker_|^confluence_/i, "").replace(/_/g, " ")}`,
-          payload.direction || "Both",
-          "PlayMaker Confluence",
-          Math.max(18, Math.round(baseScore / 2)),
-          "major"
-        ));
-      });
+    if (type.includes("CONFLUENCE")) {
+      const price = firstDefined(payload.confluence_price, payload.htf_confluence_price, payload.price, payload.trigger_price);
+      const count = n(firstDefined(payload.confluence_count, payload.matches, payload.count, payload.htfConfluenceCount), 1);
+      push(make(price, `PlayMaker confluence ${payload.sources || payload.confluence_sources || payload.matches || ""}`.trim(), payload.direction, "PlayMaker Confluence", 26 + Math.min(24, count * 6), "major"));
     }
 
     if (type.includes("ORDER_BLOCK") || type.includes("ORDER BLOCK")) {
@@ -2512,36 +2434,10 @@ const exportJournalCSV = () => {
   const markAnchorFilled = (anchor) => {
     if (!anchor) return;
     const key = anchorBaseKey(anchor);
-    const entryValue = anchor.entry ?? anchor.price ?? anchor.rawSignal?.entry ?? anchor.rawSignal?.price ?? "";
-    const directionValue = anchor.direction || anchor.rawSignal?.direction || "Both";
-    const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
-
-    // Store the FULL order card, not just a filled flag.
-    // This pins the exact setup on the board even if the scanner rebuilds, refreshes,
-    // or the live confluence list temporarily changes. It only leaves after journal/report.
-    const anchorSnapshot = {
-      ...anchor,
-      id: anchor.id || `filled-${key}-${Date.now()}`,
-      entry: entryValue,
-      price: entryValue,
-      direction: directionValue,
-      result: "Unfilled",
-      orderStatus: "Filled - Journal Needed",
-      pendingOrder: true,
-      filledLocked: true,
-      filledAt: new Date().toISOString(),
-      sourceType: anchor.sourceType || "AI Signal",
-      rawSignal: anchor.rawSignal || anchor.payload || {},
-      evidence: anchor.evidence || anchor.rawSignal?.evidence || anchor.payload?.evidence || []
-    };
-
+    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
     setFilledAnchorKeys((prev) => ({
       ...prev,
-      [key]: {
-        filledAt: new Date().toISOString(),
-        detail,
-        anchorSnapshot
-      }
+      [key]: { filledAt: new Date().toISOString(), detail }
     }));
     setNotificationLog((prev) => [{
       key: `FILLED-${key}-${Date.now()}`,
@@ -2716,26 +2612,13 @@ const exportJournalCSV = () => {
     .filter((order) => !submittedRecordForAnchor(order))
     .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes));
 
-  const filledPinnedAnchors = Object.values(filledAnchorKeys)
-    .map((record) => record?.anchorSnapshot)
-    .filter(Boolean)
-    .filter((anchor) => !submittedRecordForAnchor(anchor));
-
   const rawActiveAnchors = [
-    ...filledPinnedAnchors,
-    ...boardUnfilledOrders
-      .filter((order) => !filledPinnedAnchors.some((filled) => anchorBaseKey(filled) === anchorBaseKey(order)))
-      .map((order) => ({
+    ...boardUnfilledOrders.map((order) => ({
       ...order,
       sourceType: order.sourceType || "Manual Order"
     })),
     ...rankedAiLimitZones
       .filter((zone) => !submittedZoneMatches(zone))
-      .filter((zone) => !filledPinnedAnchors.some((filled) => {
-        const filledPrice = parsePrice(filled.entry || filled.price);
-        const sameDirection = String(filled.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
-        return filledPrice !== null && sameDirection && Math.abs(filledPrice - zone.price) <= Math.max(2, Math.min(levelMergeTolerance, zone.clusterWidth || levelMergeTolerance));
-      }))
       .filter((zone) => !unfilledOrders.some((order) => {
         const orderEntry = parsePrice(order.entry || order.entry_price);
         const sameDirection = String(order.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
@@ -3515,35 +3398,12 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
   const filledKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
   const filledRecord = filledAnchorKeys[filledKey] || null;
-  const cardRef = useRef(null);
   const [draftOwnerNote, setDraftOwnerNote] = useState(verification?.ownerNote || "");
-
-  const downloadCardScreenshot = async () => {
-    if (!cardRef.current) return;
-    try {
-      const canvas = await html2canvas(cardRef.current, {
-        backgroundColor: "#090909",
-        scale: 2,
-        useCORS: true
-      });
-      const link = document.createElement("a");
-      const direction = String(anchor.direction || "BOTH").toUpperCase();
-      const price = String(anchor.entry || anchor.price || "setup").replace(/[^0-9.\-]/g, "");
-      link.download = `playmaker-${direction}-${price || "setup"}-${Date.now()}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-    } catch (err) {
-      console.error("Playmaker card screenshot error:", err);
-      alert("Screenshot failed. Make sure html2canvas is installed, then rebuild.");
-    }
-  };
-
   useEffect(() => {
     setDraftOwnerNote(verification?.ownerNote || "");
   }, [verification?.ownerNote, verificationKey]);
   return (
     <div
-      ref={cardRef}
       onClick={() => onSelect(anchor)}
       className={`cursor-pointer rounded-2xl border bg-[#090909] p-4 text-left transition hover:border-[#ffcc19] ${selected ? "border-[#ffcc19]" : "border-[#2c2300]"}`}
     >
@@ -3617,12 +3477,6 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
           className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
         >
           Mark Filled — Keep On Board
-        </button>
-        <button
-          onClick={downloadCardScreenshot}
-          className="w-full rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]"
-        >
-          Screenshot Card — Social Post
         </button>
         <button
           onClick={() => onSubmitAnchor?.(anchor)}
