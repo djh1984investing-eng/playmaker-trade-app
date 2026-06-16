@@ -514,43 +514,64 @@ useEffect(() => {
       setAccessStatus("checking");
       setAccessMessage("Checking Playmaker access...");
 
-      const userEmail = String(user.email || "").toLowerCase();
+      const userEmail = String(user.email || "").trim().toLowerCase();
+      let row = null;
+      let accessError = null;
 
-      const { data: idRow, error: idError } = await supabase
-        .from("playmaker_access")
-        .select("id, active, expires_at")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      let row = idRow || null;
-      let error = idError || null;
-
-      if (!row && userEmail && !idError) {
+      // Manual unlock rows are usually added by email, so check email first.
+      // Keep this case-insensitive so Supabase rows still work if the email was typed with caps/spaces.
+      if (userEmail) {
         const { data: emailRow, error: emailError } = await supabase
           .from("playmaker_access")
-          .select("id, active, expires_at")
-          .eq("email", userEmail)
+          .select("id, user_id, email, active, expires_at, whop_plan")
+          .ilike("email", userEmail)
+          .order("created_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
-        row = emailRow || null;
-        error = emailError || null;
+
+        if (emailError) {
+          accessError = emailError;
+          console.error("Playmaker access email check error:", emailError);
+        } else {
+          row = emailRow || null;
+        }
       }
 
-      if (error) {
-        console.error("Playmaker access check error:", error);
+      // Fallback for rows tied directly to the Supabase auth user id.
+      if (!row && user?.id) {
+        const { data: idRow, error: idError } = await supabase
+          .from("playmaker_access")
+          .select("id, user_id, email, active, expires_at, whop_plan")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (idError) {
+          accessError = idError;
+          console.error("Playmaker access user_id check error:", idError);
+        } else {
+          row = idRow || null;
+          accessError = null;
+        }
+      }
+
+      if (accessError && !row) {
         setAccessStatus("blocked");
-        setAccessMessage("Access check failed. Purchase access or contact support.");
+        setAccessMessage("Access check failed. Check the playmaker_access table policy or contact support.");
         return;
       }
 
       const expiresAt = row?.expires_at ? new Date(row.expires_at).getTime() : null;
-      const isExpired = expiresAt && expiresAt < Date.now();
+      const isExpired = Boolean(expiresAt && expiresAt < Date.now());
+      const active = row?.active === true || String(row?.active).toLowerCase() === "true";
 
-      if (row?.active && !isExpired) {
+      if (active && !isExpired) {
         setAccessStatus("allowed");
         setAccessMessage("Access active.");
       } else {
         setAccessStatus("blocked");
-        setAccessMessage("No active Playmaker subscription found for this login email.");
+        setAccessMessage(`No active Playmaker subscription found for ${userEmail || "this login"}.`);
       }
     };
 
