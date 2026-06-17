@@ -656,6 +656,95 @@ useEffect(() => {
     } catch (_err) {}
   }, [filledAnchorKeys]);
 
+  // Global board state from Supabase. This keeps verified notes, filled cards,
+  // removed cards, and submitted board actions synced across every account/browser.
+  useEffect(() => {
+    if (!user) return;
+
+    const mapBoardRows = (rows = []) => {
+      const nextVerified = {};
+      const nextNotes = {};
+      const nextSubmitted = {};
+      const nextFilled = {};
+
+      rows.forEach((row) => {
+        const key = String(row.anchor_key || "");
+        if (!key) return;
+
+        const rowUpdatedAt = row.updated_at || new Date().toISOString();
+
+        if (row.verified || row.owner_note) {
+          const directionFromKey = key.split("|")[0] || "BOTH";
+          const verification = {
+            verified: Boolean(row.verified),
+            verifiedBy: "Mr. DJ Harrison",
+            label: `Mr. DJ Harrison Verified ${directionFromKey}`,
+            direction: directionFromKey,
+            verifiedAt: rowUpdatedAt,
+            ownerNote: String(row.owner_note || "").trim()
+          };
+          nextVerified[key] = verification;
+          nextNotes[key] = verification;
+        }
+
+        if (row.removed || row.submitted || ["removed", "submitted"].includes(String(row.status || "").toLowerCase())) {
+          nextSubmitted[key] = {
+            submittedAt: rowUpdatedAt,
+            sourceCount: Number(row.anchor_snapshot?.sourceCount || row.anchor_snapshot?.evidence?.length || 0),
+            score: Number(row.anchor_snapshot?.score || row.anchor_snapshot?.zoneScore || 0),
+            evidenceSig: Array.isArray(row.anchor_snapshot?.evidence)
+              ? row.anchor_snapshot.evidence.map((ev) => `${ev.sourceType || ""}:${ev.label || ""}:${anchorPriceKey(ev.price)}`).sort().join("|")
+              : ""
+          };
+        }
+
+        if (row.filled && row.anchor_snapshot) {
+          const snap = row.anchor_snapshot;
+          const direction = String(snap.direction || "BOTH").toUpperCase();
+          const price = snap.entry ?? snap.price ?? snap.rawSignal?.entry ?? snap.rawSignal?.price;
+          const priceKey = price === undefined || price === null || price === ""
+            ? "NA"
+            : String(Math.round(Number(String(price).replace(/,/g, "")) * 4) / 4);
+          const filledKey = `${direction}|${priceKey}`;
+          nextFilled[filledKey] = {
+            filledAt: rowUpdatedAt,
+            detail: `${direction} ${fmtPrice(price)} • marked filled • stays on board until journaled • ${formatEastern(rowUpdatedAt)}`,
+            anchorSnapshot: snap
+          };
+        }
+      });
+
+      setVerifiedAnchors(nextVerified);
+      setOwnerSignalNotes(nextNotes);
+      setSubmittedAnchorKeys((prev) => ({ ...prev, ...nextSubmitted }));
+      setFilledAnchorKeys(nextFilled);
+    };
+
+    const fetchBoardState = async () => {
+      const { data, error } = await supabase
+        .from("playmaker_board_state")
+        .select("*");
+
+      if (error) {
+        console.error("Playmaker board state fetch error:", error);
+        return;
+      }
+
+      mapBoardRows(data || []);
+    };
+
+    fetchBoardState();
+
+    const channel = supabase
+      .channel("playmaker-board-state-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "playmaker_board_state" }, fetchBoardState)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user]);
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const setStart = (key) => {
@@ -2473,7 +2562,25 @@ const exportJournalCSV = () => {
     return full || base || null;
   };
 
-  const markAnchorHiddenNow = (anchor) => {
+  const saveBoardState = async (anchorKey, patch) => {
+    if (!anchorKey) return;
+    try {
+      const { error } = await supabase
+        .from("playmaker_board_state")
+        .upsert([{
+          anchor_key: anchorKey,
+          updated_by: user?.id || null,
+          updated_at: new Date().toISOString(),
+          ...patch
+        }], { onConflict: "anchor_key" });
+
+      if (error) console.error("Playmaker board state save error:", error);
+    } catch (err) {
+      console.error("Playmaker board state save failed:", err);
+    }
+  };
+
+  const markAnchorHiddenNow = (anchor, status = "submitted") => {
     if (!anchor) return;
     const submittedKey = anchorSubmitKey(anchor);
     const submittedBaseKey = anchorBaseKey(anchor);
@@ -2493,6 +2600,22 @@ const exportJournalCSV = () => {
       const next = { ...prev };
       delete next[submittedBaseKey];
       return next;
+    });
+
+    const isRemoved = status === "removed";
+    saveBoardState(submittedKey, {
+      status,
+      submitted: !isRemoved,
+      removed: isRemoved,
+      filled: false,
+      anchor_snapshot: anchor
+    });
+    saveBoardState(priceOnlyKey, {
+      status,
+      submitted: !isRemoved,
+      removed: isRemoved,
+      filled: false,
+      anchor_snapshot: anchor
     });
 
     return { submittedKey, submittedBaseKey, priceOnlyKey, submittedRecord };
@@ -2515,6 +2638,10 @@ const exportJournalCSV = () => {
     const submittedRecord = submittedRecordForAnchor(zone);
     if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
 
+    // Member personal journals should not change the shared AI board.
+    // Only owner/global board state can remove or submit global AI cards.
+    if (!ownerMode) return false;
+
     const zonePrice = parsePrice(zone?.price || zone?.entry);
     const zoneDirection = String(zone?.direction || "BOTH").toUpperCase();
     return journal.some((j) => {
@@ -2531,6 +2658,10 @@ const exportJournalCSV = () => {
 
   const markAnchorFilled = (anchor) => {
     if (!anchor) return;
+    if (anchor.sourceType === "AI Signal" && !ownerMode) {
+      alert("Only the owner can mark global AI signals filled.");
+      return;
+    }
     const key = anchorBaseKey(anchor);
     const entryValue = anchor.entry ?? anchor.price ?? anchor.rawSignal?.entry ?? anchor.rawSignal?.price ?? "";
     const directionValue = anchor.direction || anchor.rawSignal?.direction || "Both";
@@ -2563,6 +2694,14 @@ const exportJournalCSV = () => {
         anchorSnapshot
       }
     }));
+    saveBoardState(key, {
+      status: "filled",
+      filled: true,
+      removed: false,
+      submitted: false,
+      anchor_snapshot: anchorSnapshot
+    });
+
     setNotificationLog((prev) => [{
       key: `FILLED-${key}-${Date.now()}`,
       kind: "FILLED",
@@ -2575,7 +2714,11 @@ const exportJournalCSV = () => {
 
   const dismissAnchorFromBoard = async (anchor) => {
     if (!anchor) return;
-    const hidden = markAnchorHiddenNow(anchor);
+    if (anchor.sourceType === "AI Signal" && !ownerMode) {
+      alert("Only the owner can remove global AI signals from the board.");
+      return;
+    }
+    const hidden = markAnchorHiddenNow(anchor, "removed");
     const submittedKey = hidden?.submittedKey || anchorSubmitKey(anchor);
 
     // Manual orders live in the journal table as open orders. Removing from board
@@ -2609,9 +2752,9 @@ const exportJournalCSV = () => {
   const submitAnchorToJournal = async (anchor) => {
     if (!anchor) return;
 
-    // Hide it immediately before the database round trip so the same card cannot
-    // rebuild on the board while Supabase is saving.
-    const hidden = markAnchorHiddenNow(anchor);
+    // Owner submit affects the shared board/global journal flow.
+    // Member submit saves to that member's personal journal only and leaves the shared board alone.
+    const hidden = ownerMode || anchor.sourceType !== "AI Signal" ? markAnchorHiddenNow(anchor, "submitted") : null;
 
     const payload = anchor.rawSignal || anchor.payload || {};
     const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
@@ -2701,6 +2844,13 @@ const exportJournalCSV = () => {
       ...prev,
       [key]: verification
     }));
+    saveBoardState(key, {
+      status: "active",
+      verified: true,
+      owner_note: verification.ownerNote,
+      removed: false,
+      anchor_snapshot: anchor
+    });
   };
 
   const removeAnchorVerification = (anchor) => {
@@ -2715,6 +2865,11 @@ const exportJournalCSV = () => {
       const next = { ...prev };
       delete next[key];
       return next;
+    });
+    saveBoardState(key, {
+      verified: false,
+      owner_note: null,
+      anchor_snapshot: anchor
     });
   };
 
@@ -3652,13 +3807,25 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       ctx.font = "28px Arial";
       ctx.fillText(`Zone ${zoneScore}/100   |   Precision ${precisionScore}/100   |   Sources ${sourceCount}`, 92, 398);
 
-      fillRoundRect(92, 442, 896, 132, 22, "#111111", "#2c2300");
+      let topBoxY = 442;
+      if (verifiedLabel || verification?.ownerNote) {
+        fillRoundRect(92, 426, 896, verification?.ownerNote ? 118 : 68, 20, "#001a0f", "#00d27a");
+        ctx.fillStyle = "#00d27a";
+        ctx.font = "900 28px Arial";
+        ctx.fillText(verifiedLabel || "Mr. DJ Harrison Verified", 122, 468);
+        if (verification?.ownerNote) {
+          wrapText(`Note: ${verification.ownerNote}`, 122, 506, 830, 30, 2, "#ffffff", "24px Arial");
+        }
+        topBoxY = verification?.ownerNote ? 568 : 518;
+      }
+
+      fillRoundRect(92, topBoxY, 896, 132, 22, "#111111", "#2c2300");
       ctx.fillStyle = "#ffcc19";
       ctx.font = "900 28px Arial";
-      ctx.fillText("ENTRY STACK", 122, 488);
-      wrapText(clusterText, 122, 530, 830, 34, 2, "#e4e4e7", "28px Arial");
+      ctx.fillText("ENTRY STACK", 122, topBoxY + 46);
+      wrapText(clusterText, 122, topBoxY + 88, 830, 34, 2, "#e4e4e7", "28px Arial");
 
-      let y = 640;
+      let y = topBoxY + 198;
       ctx.fillStyle = "#ffcc19";
       ctx.font = "900 30px Arial";
       ctx.fillText("STOP PLAN", 92, y);
@@ -3797,12 +3964,14 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       )}
 
       <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
-        <button
-          onClick={() => onMarkFilled?.(anchor)}
-          className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
-        >
-          Mark Filled — Keep On Board
-        </button>
+        {(ownerMode || !isAi) && (
+          <button
+            onClick={() => onMarkFilled?.(anchor)}
+            className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
+          >
+            Mark Filled — Keep On Board
+          </button>
+        )}
         <button
           onClick={downloadCardScreenshot}
           className="w-full rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]"
@@ -3813,14 +3982,16 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
           onClick={() => onSubmitAnchor?.(anchor)}
           className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
         >
-          Submit / Report to Journal
+          {ownerMode || !isAi ? "Submit / Report to Journal" : "Save to My Personal Journal"}
         </button>
-        <button
-          onClick={() => onDismissAnchor?.(anchor)}
-          className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
-        >
-          Remove From Board
-        </button>
+        {(ownerMode || !isAi) && (
+          <button
+            onClick={() => onDismissAnchor?.(anchor)}
+            className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
+          >
+            Remove From Board
+          </button>
+        )}
       </div>
 
       {isAi && <EvidenceList evidence={evidence} />}
