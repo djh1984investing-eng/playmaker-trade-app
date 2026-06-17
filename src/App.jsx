@@ -12,6 +12,7 @@ const roundToTick = (price) => {
   return Math.round(parsed / TICK_SIZE) * TICK_SIZE;
 };
 const OWNER_EMAILS = ["djh1984investing@gmail.com", "djharrison", "durrell", "djh1984investing-eng"];
+const GLOBAL_AI_LEVEL_USER_ID = "djh1984investing-eng";
 const isOwnerUser = (user) => {
   const text = String(user?.email || user?.id || "").toLowerCase();
   return OWNER_EMAILS.some((owner) => text.includes(String(owner).toLowerCase()));
@@ -429,6 +430,7 @@ useEffect(() => {
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
   const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
+  const [aiSetupArchive, setAiSetupArchive] = useState([]);
 
   const previousAnchorMapRef = useRef(new Map());
   const notificationAudioRef = useRef(null);
@@ -830,7 +832,6 @@ useEffect(() => {
     const { data, error } = await supabase
       .from("ai_levels")
       .select("*")
-      .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -933,7 +934,7 @@ useEffect(() => {
     }
 
     const payload = {
-      user_id: user.id,
+      user_id: GLOBAL_AI_LEVEL_USER_ID,
       level_type: "weekly",
       name: aiSettings.weeklyLevelName || "Weekly Level",
       price,
@@ -945,8 +946,7 @@ useEffect(() => {
       const { error } = await supabase
         .from("ai_levels")
         .update(payload)
-        .eq("id", editingWeeklyLevelId)
-        .eq("user_id", user.id);
+        .eq("id", editingWeeklyLevelId);
 
       if (error) {
         console.error("Weekly level update error:", error);
@@ -999,7 +999,7 @@ useEffect(() => {
     const high = Math.max(top, bottom);
     const low = Math.min(top, bottom);
     const payload = {
-      user_id: user.id,
+      user_id: GLOBAL_AI_LEVEL_USER_ID,
       level_type: "crater",
       name: aiSettings.craterBoxName || "Crater Box",
       price: null,
@@ -1011,8 +1011,7 @@ useEffect(() => {
       const { error } = await supabase
         .from("ai_levels")
         .update(payload)
-        .eq("id", editingCraterBoxId)
-        .eq("user_id", user.id);
+        .eq("id", editingCraterBoxId);
 
       if (error) {
         console.error("Crater box update error:", error);
@@ -1072,8 +1071,7 @@ useEffect(() => {
     const { error } = await supabase
       .from("ai_levels")
       .delete()
-      .eq("id", level.id)
-      .eq("user_id", user.id);
+      .eq("id", level.id);
 
     if (error) {
       console.error("AI level delete error:", error);
@@ -2823,10 +2821,22 @@ const exportJournalCSV = () => {
 
   const anchorVerificationKey = (anchor) => String(anchor?.signal_id || anchor?.sourceId || anchor?.id || anchor?.entry || "");
 
+  const anchorVerificationKeys = (anchor) => {
+    const keys = [
+      anchorVerificationKey(anchor),
+      anchorBaseKey(anchor),
+      anchorSubmitKey(anchor),
+      `${anchorBaseKey(anchor)}|`
+    ]
+      .map((key) => String(key || "").trim())
+      .filter(Boolean);
+    return Array.from(new Set(keys));
+  };
+
   const verifyAnchor = (anchor, ownerNote = "") => {
     if (!ownerMode || !anchor) return;
-    const key = anchorVerificationKey(anchor);
-    if (!key) return;
+    const keys = anchorVerificationKeys(anchor);
+    if (!keys.length) return;
     const direction = String(anchor.direction || "Both").toUpperCase();
     const verification = {
       verified: true,
@@ -2838,39 +2848,40 @@ const exportJournalCSV = () => {
     };
     setVerifiedAnchors((prev) => ({
       ...prev,
-      [key]: verification
+      ...Object.fromEntries(keys.map((key) => [key, verification]))
     }));
     setOwnerSignalNotes((prev) => ({
       ...prev,
-      [key]: verification
+      ...Object.fromEntries(keys.map((key) => [key, verification]))
     }));
-    saveBoardState(key, {
+    keys.forEach((key) => saveBoardState(key, {
       status: "active",
       verified: true,
       owner_note: verification.ownerNote,
       removed: false,
+      submitted: false,
       anchor_snapshot: anchor
-    });
+    }));
   };
 
   const removeAnchorVerification = (anchor) => {
     if (!ownerMode || !anchor) return;
-    const key = anchorVerificationKey(anchor);
+    const keys = anchorVerificationKeys(anchor);
     setVerifiedAnchors((prev) => {
       const next = { ...prev };
-      delete next[key];
+      keys.forEach((key) => delete next[key]);
       return next;
     });
     setOwnerSignalNotes((prev) => {
       const next = { ...prev };
-      delete next[key];
+      keys.forEach((key) => delete next[key]);
       return next;
     });
-    saveBoardState(key, {
+    keys.forEach((key) => saveBoardState(key, {
       verified: false,
       owner_note: null,
       anchor_snapshot: anchor
-    });
+    }));
   };
 
   const [manualLetter, manualText] = grade(report.score);
@@ -2935,7 +2946,7 @@ const exportJournalCSV = () => {
       zoneScore: zone.zoneScore || zone.score,
       sourceCount: zone.sourceCount || zone.evidence?.length || 0,
       evidence: zone.evidence || [],
-      verification: verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
+      verification: verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[anchorBaseKey(zone)] || verifiedAnchors[anchorSubmitKey(zone)] || verifiedAnchors[`${anchorBaseKey(zone)}|`] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
       result: "Unfilled",
       orderStatus: zone.status,
       pendingOrder: true,
@@ -2992,6 +3003,55 @@ const exportJournalCSV = () => {
     });
     return Array.from(best.values()).sort((a, b) => (Number(b.score || 0) - Number(a.score || 0)) || ((Number(a.entry || a.price) || 0) - (Number(b.entry || b.price) || 0)));
   }, [rawActiveAnchors]);
+
+  useEffect(() => {
+    if (!user || !ownerMode) return;
+
+    const fetchAiSetupArchive = async () => {
+      const { data, error } = await supabase
+        .from("playmaker_ai_setups")
+        .select("*")
+        .order("updated_at", { ascending: false })
+        .limit(500);
+
+      if (!error && data) setAiSetupArchive(data);
+    };
+
+    const persistAiSetups = async () => {
+      const rows = activeAnchors
+        .filter((anchor) => anchor.sourceType === "AI Signal")
+        .map((anchor) => ({
+          setup_key: anchorSubmitKey(anchor),
+          base_key: anchorBaseKey(anchor),
+          symbol: "NQ",
+          direction: anchor.direction || "Both",
+          entry_price: Number(anchor.entry || anchor.price) || null,
+          grade: anchor.grade || null,
+          score: Number(anchor.score || anchor.zoneScore || 0) || null,
+          precision_score: Number(anchor.precisionScore || 0) || null,
+          zone_score: Number(anchor.zoneScore || anchor.score || 0) || null,
+          source_count: Number(anchor.sourceCount || anchor.evidence?.length || 0) || 0,
+          status: anchor.filledLocked ? "filled" : "active",
+          verified: Boolean(anchor.verification?.verified),
+          owner_note: anchor.verification?.ownerNote || null,
+          anchor_snapshot: anchor,
+          updated_at: new Date().toISOString()
+        }));
+
+      if (rows.length) {
+        const { error } = await supabase
+          .from("playmaker_ai_setups")
+          .upsert(rows, { onConflict: "setup_key" });
+
+        if (error) console.error("AI setup archive save error:", error);
+      }
+
+      fetchAiSetupArchive();
+    };
+
+    persistAiSetups();
+  }, [user, ownerMode, activeAnchors, verifiedAnchors]);
+
   const aiAnchorsOnly = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
   const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
   const intermediateWatchlist = aiAnchorsOnly.filter((anchor) => ["B+", "B"].includes(anchor.grade));
@@ -3611,6 +3671,28 @@ const exportJournalCSV = () => {
               </div>
             </Card>
             )}
+
+            {ownerMode && (
+            <Card className="lg:col-span-2">
+              <Title>AI Setup Archive</Title>
+              <p className="mt-2 text-sm text-zinc-400">Owner-only saved AI cards. These remain stored whether the setup is active, filled, submitted, or removed.</p>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {aiSetupArchive.length === 0 && <div className="text-zinc-500">No archived AI setup cards stored yet.</div>}
+                {aiSetupArchive.slice(0, 50).map((setup) => (
+                  <div key={setup.id || setup.setup_key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <b className="text-[#ffcc19]">{String(setup.direction || "BOTH").toUpperCase()} {fmtPrice(setup.entry_price)}</b>
+                      <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-black text-zinc-300">{setup.status || "stored"}</span>
+                    </div>
+                    <div className="mt-2 text-sm text-zinc-400">Grade {setup.grade || "--"} • Score {setup.score || "--"} • Sources {setup.source_count || 0}</div>
+                    {setup.verified && <div className="mt-2 text-xs font-black text-[#00d27a]">Mr. DJ Harrison Verified</div>}
+                    {setup.owner_note && <div className="mt-1 text-xs text-zinc-300">Note: {setup.owner_note}</div>}
+                    <div className="mt-1 text-xs text-zinc-500">{setup.updated_at ? formatEastern(setup.updated_at) : "--"}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+            )}
           </div>
         )}
 
@@ -3686,7 +3768,8 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
-  const verification = anchor.verification || verifiedAnchors[verificationKey] || null;
+  const verificationBaseKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
+  const verification = anchor.verification || verifiedAnchors[verificationKey] || verifiedAnchors[verificationBaseKey] || verifiedAnchors[`${verificationBaseKey}|`] || null;
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
   const filledKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
   const filledRecord = filledAnchorKeys[filledKey] || null;
