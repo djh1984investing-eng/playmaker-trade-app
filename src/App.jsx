@@ -12,7 +12,6 @@ const roundToTick = (price) => {
   return Math.round(parsed / TICK_SIZE) * TICK_SIZE;
 };
 const OWNER_EMAILS = ["djh1984investing@gmail.com", "djharrison", "durrell", "djh1984investing-eng"];
-const GLOBAL_AI_LEVEL_USER_ID = "djh1984investing-eng";
 const isOwnerUser = (user) => {
   const text = String(user?.email || user?.id || "").toLowerCase();
   return OWNER_EMAILS.some((owner) => text.includes(String(owner).toLowerCase()));
@@ -430,7 +429,6 @@ useEffect(() => {
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
   const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
-  const [aiSetupArchive, setAiSetupArchive] = useState([]);
 
   const previousAnchorMapRef = useRef(new Map());
   const notificationAudioRef = useRef(null);
@@ -658,88 +656,52 @@ useEffect(() => {
     } catch (_err) {}
   }, [filledAnchorKeys]);
 
-  // Global board state from Supabase. This keeps verified notes, filled cards,
-  // removed cards, and submitted board actions synced across every account/browser.
+  // Global verification/note sync from Supabase.
+  // This keeps Mr. DJ Harrison verification badges and owner notes visible
+  // after refresh and across customer accounts.
   useEffect(() => {
     if (!user) return;
 
-    const mapBoardRows = (rows = []) => {
-      const nextVerified = {};
-      const nextNotes = {};
-      const nextSubmitted = {};
-      const nextFilled = {};
-
-      rows.forEach((row) => {
-        const key = String(row.anchor_key || "");
-        if (!key) return;
-
-        const rowUpdatedAt = row.updated_at || new Date().toISOString();
-
-        if (row.verified || row.owner_note) {
-          const directionFromKey = key.split("|")[0] || "BOTH";
-          const verification = {
-            verified: Boolean(row.verified),
-            verifiedBy: "Mr. DJ Harrison",
-            label: `Mr. DJ Harrison Verified ${directionFromKey}`,
-            direction: directionFromKey,
-            verifiedAt: rowUpdatedAt,
-            ownerNote: String(row.owner_note || "").trim()
-          };
-          nextVerified[key] = verification;
-          nextNotes[key] = verification;
-        }
-
-        if (row.removed || row.submitted || ["removed", "submitted"].includes(String(row.status || "").toLowerCase())) {
-          nextSubmitted[key] = {
-            submittedAt: rowUpdatedAt,
-            sourceCount: Number(row.anchor_snapshot?.sourceCount || row.anchor_snapshot?.evidence?.length || 0),
-            score: Number(row.anchor_snapshot?.score || row.anchor_snapshot?.zoneScore || 0),
-            evidenceSig: Array.isArray(row.anchor_snapshot?.evidence)
-              ? row.anchor_snapshot.evidence.map((ev) => `${ev.sourceType || ""}:${ev.label || ""}:${anchorPriceKey(ev.price)}`).sort().join("|")
-              : ""
-          };
-        }
-
-        if (row.filled && row.anchor_snapshot) {
-          const snap = row.anchor_snapshot;
-          const direction = String(snap.direction || "BOTH").toUpperCase();
-          const price = snap.entry ?? snap.price ?? snap.rawSignal?.entry ?? snap.rawSignal?.price;
-          const priceKey = price === undefined || price === null || price === ""
-            ? "NA"
-            : String(Math.round(Number(String(price).replace(/,/g, "")) * 4) / 4);
-          const filledKey = `${direction}|${priceKey}`;
-          nextFilled[filledKey] = {
-            filledAt: rowUpdatedAt,
-            detail: `${direction} ${fmtPrice(price)} • marked filled • stays on board until journaled • ${formatEastern(rowUpdatedAt)}`,
-            anchorSnapshot: snap
-          };
-        }
-      });
-
-      setVerifiedAnchors(nextVerified);
-      setOwnerSignalNotes(nextNotes);
-      setSubmittedAnchorKeys((prev) => ({ ...prev, ...nextSubmitted }));
-      setFilledAnchorKeys(nextFilled);
-    };
-
-    const fetchBoardState = async () => {
+    const fetchBoardVerification = async () => {
       const { data, error } = await supabase
         .from("playmaker_board_state")
         .select("*");
 
       if (error) {
-        console.error("Playmaker board state fetch error:", error);
+        console.error("Playmaker verification sync fetch error:", error);
         return;
       }
 
-      mapBoardRows(data || []);
+      const nextVerified = {};
+      const nextNotes = {};
+
+      (data || []).forEach((row) => {
+        const key = String(row.anchor_key || row.card_id || "").trim();
+        if (!key || !(row.verified || row.owner_note)) return;
+
+        const directionFromKey = key.split("|")[0] || "BOTH";
+        const verification = {
+          verified: Boolean(row.verified),
+          verifiedBy: "Mr. DJ Harrison",
+          label: `Mr. DJ Harrison Verified ${directionFromKey}`,
+          direction: directionFromKey,
+          verifiedAt: row.updated_at || new Date().toISOString(),
+          ownerNote: String(row.owner_note || "").trim()
+        };
+
+        nextVerified[key] = verification;
+        nextNotes[key] = verification;
+      });
+
+      setVerifiedAnchors((prev) => ({ ...prev, ...nextVerified }));
+      setOwnerSignalNotes((prev) => ({ ...prev, ...nextNotes }));
     };
 
-    fetchBoardState();
+    fetchBoardVerification();
 
     const channel = supabase
-      .channel("playmaker-board-state-sync")
-      .on("postgres_changes", { event: "*", schema: "public", table: "playmaker_board_state" }, fetchBoardState)
+      .channel("playmaker-board-verification-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "playmaker_board_state" }, fetchBoardVerification)
       .subscribe();
 
     return () => {
@@ -832,6 +794,7 @@ useEffect(() => {
     const { data, error } = await supabase
       .from("ai_levels")
       .select("*")
+      .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -934,7 +897,7 @@ useEffect(() => {
     }
 
     const payload = {
-      user_id: GLOBAL_AI_LEVEL_USER_ID,
+      user_id: user.id,
       level_type: "weekly",
       name: aiSettings.weeklyLevelName || "Weekly Level",
       price,
@@ -946,7 +909,8 @@ useEffect(() => {
       const { error } = await supabase
         .from("ai_levels")
         .update(payload)
-        .eq("id", editingWeeklyLevelId);
+        .eq("id", editingWeeklyLevelId)
+        .eq("user_id", user.id);
 
       if (error) {
         console.error("Weekly level update error:", error);
@@ -999,7 +963,7 @@ useEffect(() => {
     const high = Math.max(top, bottom);
     const low = Math.min(top, bottom);
     const payload = {
-      user_id: GLOBAL_AI_LEVEL_USER_ID,
+      user_id: user.id,
       level_type: "crater",
       name: aiSettings.craterBoxName || "Crater Box",
       price: null,
@@ -1011,7 +975,8 @@ useEffect(() => {
       const { error } = await supabase
         .from("ai_levels")
         .update(payload)
-        .eq("id", editingCraterBoxId);
+        .eq("id", editingCraterBoxId)
+        .eq("user_id", user.id);
 
       if (error) {
         console.error("Crater box update error:", error);
@@ -1071,7 +1036,8 @@ useEffect(() => {
     const { error } = await supabase
       .from("ai_levels")
       .delete()
-      .eq("id", level.id);
+      .eq("id", level.id)
+      .eq("user_id", user.id);
 
     if (error) {
       console.error("AI level delete error:", error);
@@ -2561,24 +2527,35 @@ const exportJournalCSV = () => {
   };
 
   const saveBoardState = async (anchorKey, patch) => {
-    if (!anchorKey) return;
+    if (!anchorKey) return false;
+
+    const payload = {
+      anchor_key: anchorKey,
+      updated_by: user?.id || null,
+      updated_at: new Date().toISOString(),
+      ...patch
+    };
+
     try {
       const { error } = await supabase
         .from("playmaker_board_state")
-        .upsert([{
-          anchor_key: anchorKey,
-          updated_by: user?.id || null,
-          updated_at: new Date().toISOString(),
-          ...patch
-        }], { onConflict: "anchor_key" });
+        .upsert([payload], { onConflict: "anchor_key" });
 
-      if (error) console.error("Playmaker board state save error:", error);
+      if (error) {
+        console.error("Playmaker board state save error:", error, payload);
+        alert(`Verification did not save to Supabase: ${error.message || error}`);
+        return false;
+      }
+
+      return true;
     } catch (err) {
-      console.error("Playmaker board state save failed:", err);
+      console.error("Playmaker board state save failed:", err, payload);
+      alert(`Verification did not save to Supabase: ${err?.message || err}`);
+      return false;
     }
   };
 
-  const markAnchorHiddenNow = (anchor, status = "submitted") => {
+  const markAnchorHiddenNow = (anchor) => {
     if (!anchor) return;
     const submittedKey = anchorSubmitKey(anchor);
     const submittedBaseKey = anchorBaseKey(anchor);
@@ -2598,22 +2575,6 @@ const exportJournalCSV = () => {
       const next = { ...prev };
       delete next[submittedBaseKey];
       return next;
-    });
-
-    const isRemoved = status === "removed";
-    saveBoardState(submittedKey, {
-      status,
-      submitted: !isRemoved,
-      removed: isRemoved,
-      filled: false,
-      anchor_snapshot: anchor
-    });
-    saveBoardState(priceOnlyKey, {
-      status,
-      submitted: !isRemoved,
-      removed: isRemoved,
-      filled: false,
-      anchor_snapshot: anchor
     });
 
     return { submittedKey, submittedBaseKey, priceOnlyKey, submittedRecord };
@@ -2636,10 +2597,6 @@ const exportJournalCSV = () => {
     const submittedRecord = submittedRecordForAnchor(zone);
     if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
 
-    // Member personal journals should not change the shared AI board.
-    // Only owner/global board state can remove or submit global AI cards.
-    if (!ownerMode) return false;
-
     const zonePrice = parsePrice(zone?.price || zone?.entry);
     const zoneDirection = String(zone?.direction || "BOTH").toUpperCase();
     return journal.some((j) => {
@@ -2656,10 +2613,6 @@ const exportJournalCSV = () => {
 
   const markAnchorFilled = (anchor) => {
     if (!anchor) return;
-    if (anchor.sourceType === "AI Signal" && !ownerMode) {
-      alert("Only the owner can mark global AI signals filled.");
-      return;
-    }
     const key = anchorBaseKey(anchor);
     const entryValue = anchor.entry ?? anchor.price ?? anchor.rawSignal?.entry ?? anchor.rawSignal?.price ?? "";
     const directionValue = anchor.direction || anchor.rawSignal?.direction || "Both";
@@ -2692,14 +2645,6 @@ const exportJournalCSV = () => {
         anchorSnapshot
       }
     }));
-    saveBoardState(key, {
-      status: "filled",
-      filled: true,
-      removed: false,
-      submitted: false,
-      anchor_snapshot: anchorSnapshot
-    });
-
     setNotificationLog((prev) => [{
       key: `FILLED-${key}-${Date.now()}`,
       kind: "FILLED",
@@ -2712,11 +2657,7 @@ const exportJournalCSV = () => {
 
   const dismissAnchorFromBoard = async (anchor) => {
     if (!anchor) return;
-    if (anchor.sourceType === "AI Signal" && !ownerMode) {
-      alert("Only the owner can remove global AI signals from the board.");
-      return;
-    }
-    const hidden = markAnchorHiddenNow(anchor, "removed");
+    const hidden = markAnchorHiddenNow(anchor);
     const submittedKey = hidden?.submittedKey || anchorSubmitKey(anchor);
 
     // Manual orders live in the journal table as open orders. Removing from board
@@ -2750,15 +2691,15 @@ const exportJournalCSV = () => {
   const submitAnchorToJournal = async (anchor) => {
     if (!anchor) return;
 
-    // Owner submit affects the shared board/global journal flow.
-    // Member submit saves to that member's personal journal only and leaves the shared board alone.
-    const hidden = ownerMode || anchor.sourceType !== "AI Signal" ? markAnchorHiddenNow(anchor, "submitted") : null;
+    // Hide it immediately before the database round trip so the same card cannot
+    // rebuild on the board while Supabase is saving.
+    const hidden = markAnchorHiddenNow(anchor);
 
     const payload = anchor.rawSignal || anchor.payload || {};
     const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
     const directionValue = anchor.direction || payload.direction || "Both";
     const signalName = anchor.signalName || payload.signal || "AI Level";
-    const verification = anchor.verification || verifiedAnchors[anchorVerificationKey(anchor)] || ownerSignalNotes[anchorVerificationKey(anchor)] || null;
+    const verification = getAnchorVerification(anchor);
 
     const item = {
       id: `reported-${anchor.id || Date.now()}`,
@@ -2819,24 +2760,34 @@ const exportJournalCSV = () => {
     setTab("journal");
   };
 
-  const anchorVerificationKey = (anchor) => String(anchor?.signal_id || anchor?.sourceId || anchor?.id || anchor?.entry || "");
+  const anchorVerificationKey = (anchor) => anchorBaseKey(anchor);
 
   const anchorVerificationKeys = (anchor) => {
-    const keys = [
-      anchorVerificationKey(anchor),
-      anchorBaseKey(anchor),
-      anchorSubmitKey(anchor),
-      `${anchorBaseKey(anchor)}|`
-    ]
-      .map((key) => String(key || "").trim())
-      .filter(Boolean);
-    return Array.from(new Set(keys));
+    const baseKey = anchorBaseKey(anchor);
+    const legacyKey = String(anchor?.signal_id || anchor?.sourceId || anchor?.id || anchor?.entry || "").trim();
+    const submitKey = anchorSubmitKey(anchor);
+    return Array.from(new Set([
+      baseKey,
+      `${baseKey}|`,
+      submitKey,
+      legacyKey
+    ].filter(Boolean)));
   };
 
-  const verifyAnchor = (anchor, ownerNote = "") => {
+  const getAnchorVerification = (anchor) => {
+    if (!anchor) return null;
+    for (const key of anchorVerificationKeys(anchor)) {
+      if (verifiedAnchors[key]) return verifiedAnchors[key];
+      if (ownerSignalNotes[key]) return ownerSignalNotes[key];
+    }
+    return anchor.verification || null;
+  };
+
+  const verifyAnchor = async (anchor, ownerNote = "") => {
     if (!ownerMode || !anchor) return;
     const keys = anchorVerificationKeys(anchor);
     if (!keys.length) return;
+
     const direction = String(anchor.direction || "Both").toUpperCase();
     const verification = {
       verified: true,
@@ -2846,6 +2797,7 @@ const exportJournalCSV = () => {
       verifiedAt: new Date().toISOString(),
       ownerNote: String(ownerNote || "").trim()
     };
+
     setVerifiedAnchors((prev) => ({
       ...prev,
       ...Object.fromEntries(keys.map((key) => [key, verification]))
@@ -2854,19 +2806,21 @@ const exportJournalCSV = () => {
       ...prev,
       ...Object.fromEntries(keys.map((key) => [key, verification]))
     }));
-    keys.forEach((key) => saveBoardState(key, {
+
+    await Promise.all(keys.map((key) => saveBoardState(key, {
       status: "active",
       verified: true,
       owner_note: verification.ownerNote,
       removed: false,
       submitted: false,
       anchor_snapshot: anchor
-    }));
+    })));
   };
 
-  const removeAnchorVerification = (anchor) => {
+  const removeAnchorVerification = async (anchor) => {
     if (!ownerMode || !anchor) return;
     const keys = anchorVerificationKeys(anchor);
+
     setVerifiedAnchors((prev) => {
       const next = { ...prev };
       keys.forEach((key) => delete next[key]);
@@ -2877,11 +2831,12 @@ const exportJournalCSV = () => {
       keys.forEach((key) => delete next[key]);
       return next;
     });
-    keys.forEach((key) => saveBoardState(key, {
+
+    await Promise.all(keys.map((key) => saveBoardState(key, {
       verified: false,
       owner_note: null,
       anchor_snapshot: anchor
-    }));
+    })));
   };
 
   const [manualLetter, manualText] = grade(report.score);
@@ -2946,7 +2901,7 @@ const exportJournalCSV = () => {
       zoneScore: zone.zoneScore || zone.score,
       sourceCount: zone.sourceCount || zone.evidence?.length || 0,
       evidence: zone.evidence || [],
-      verification: verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[anchorBaseKey(zone)] || verifiedAnchors[anchorSubmitKey(zone)] || verifiedAnchors[`${anchorBaseKey(zone)}|`] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
+      verification: getAnchorVerification(zone) || verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
       result: "Unfilled",
       orderStatus: zone.status,
       pendingOrder: true,
@@ -3003,55 +2958,6 @@ const exportJournalCSV = () => {
     });
     return Array.from(best.values()).sort((a, b) => (Number(b.score || 0) - Number(a.score || 0)) || ((Number(a.entry || a.price) || 0) - (Number(b.entry || b.price) || 0)));
   }, [rawActiveAnchors]);
-
-  useEffect(() => {
-    if (!user || !ownerMode) return;
-
-    const fetchAiSetupArchive = async () => {
-      const { data, error } = await supabase
-        .from("playmaker_ai_setups")
-        .select("*")
-        .order("updated_at", { ascending: false })
-        .limit(500);
-
-      if (!error && data) setAiSetupArchive(data);
-    };
-
-    const persistAiSetups = async () => {
-      const rows = activeAnchors
-        .filter((anchor) => anchor.sourceType === "AI Signal")
-        .map((anchor) => ({
-          setup_key: anchorSubmitKey(anchor),
-          base_key: anchorBaseKey(anchor),
-          symbol: "NQ",
-          direction: anchor.direction || "Both",
-          entry_price: Number(anchor.entry || anchor.price) || null,
-          grade: anchor.grade || null,
-          score: Number(anchor.score || anchor.zoneScore || 0) || null,
-          precision_score: Number(anchor.precisionScore || 0) || null,
-          zone_score: Number(anchor.zoneScore || anchor.score || 0) || null,
-          source_count: Number(anchor.sourceCount || anchor.evidence?.length || 0) || 0,
-          status: anchor.filledLocked ? "filled" : "active",
-          verified: Boolean(anchor.verification?.verified),
-          owner_note: anchor.verification?.ownerNote || null,
-          anchor_snapshot: anchor,
-          updated_at: new Date().toISOString()
-        }));
-
-      if (rows.length) {
-        const { error } = await supabase
-          .from("playmaker_ai_setups")
-          .upsert(rows, { onConflict: "setup_key" });
-
-        if (error) console.error("AI setup archive save error:", error);
-      }
-
-      fetchAiSetupArchive();
-    };
-
-    persistAiSetups();
-  }, [user, ownerMode, activeAnchors, verifiedAnchors]);
-
   const aiAnchorsOnly = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
   const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
   const intermediateWatchlist = aiAnchorsOnly.filter((anchor) => ["B+", "B"].includes(anchor.grade));
@@ -3671,28 +3577,6 @@ const exportJournalCSV = () => {
               </div>
             </Card>
             )}
-
-            {ownerMode && (
-            <Card className="lg:col-span-2">
-              <Title>AI Setup Archive</Title>
-              <p className="mt-2 text-sm text-zinc-400">Owner-only saved AI cards. These remain stored whether the setup is active, filled, submitted, or removed.</p>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {aiSetupArchive.length === 0 && <div className="text-zinc-500">No archived AI setup cards stored yet.</div>}
-                {aiSetupArchive.slice(0, 50).map((setup) => (
-                  <div key={setup.id || setup.setup_key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <b className="text-[#ffcc19]">{String(setup.direction || "BOTH").toUpperCase()} {fmtPrice(setup.entry_price)}</b>
-                      <span className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-black text-zinc-300">{setup.status || "stored"}</span>
-                    </div>
-                    <div className="mt-2 text-sm text-zinc-400">Grade {setup.grade || "--"} • Score {setup.score || "--"} • Sources {setup.source_count || 0}</div>
-                    {setup.verified && <div className="mt-2 text-xs font-black text-[#00d27a]">Mr. DJ Harrison Verified</div>}
-                    {setup.owner_note && <div className="mt-1 text-xs text-zinc-300">Note: {setup.owner_note}</div>}
-                    <div className="mt-1 text-xs text-zinc-500">{setup.updated_at ? formatEastern(setup.updated_at) : "--"}</div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-            )}
           </div>
         )}
 
@@ -3769,7 +3653,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
   const verificationBaseKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
-  const verification = anchor.verification || verifiedAnchors[verificationKey] || verifiedAnchors[verificationBaseKey] || verifiedAnchors[`${verificationBaseKey}|`] || null;
+  const verification = anchor.verification || verifiedAnchors[verificationBaseKey] || verifiedAnchors[`${verificationBaseKey}|`] || verifiedAnchors[verificationKey] || null;
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
   const filledKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
   const filledRecord = filledAnchorKeys[filledKey] || null;
@@ -3890,25 +3774,13 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       ctx.font = "28px Arial";
       ctx.fillText(`Zone ${zoneScore}/100   |   Precision ${precisionScore}/100   |   Sources ${sourceCount}`, 92, 398);
 
-      let topBoxY = 442;
-      if (verifiedLabel || verification?.ownerNote) {
-        fillRoundRect(92, 426, 896, verification?.ownerNote ? 118 : 68, 20, "#001a0f", "#00d27a");
-        ctx.fillStyle = "#00d27a";
-        ctx.font = "900 28px Arial";
-        ctx.fillText(verifiedLabel || "Mr. DJ Harrison Verified", 122, 468);
-        if (verification?.ownerNote) {
-          wrapText(`Note: ${verification.ownerNote}`, 122, 506, 830, 30, 2, "#ffffff", "24px Arial");
-        }
-        topBoxY = verification?.ownerNote ? 568 : 518;
-      }
-
-      fillRoundRect(92, topBoxY, 896, 132, 22, "#111111", "#2c2300");
+      fillRoundRect(92, 442, 896, 132, 22, "#111111", "#2c2300");
       ctx.fillStyle = "#ffcc19";
       ctx.font = "900 28px Arial";
-      ctx.fillText("ENTRY STACK", 122, topBoxY + 46);
-      wrapText(clusterText, 122, topBoxY + 88, 830, 34, 2, "#e4e4e7", "28px Arial");
+      ctx.fillText("ENTRY STACK", 122, 488);
+      wrapText(clusterText, 122, 530, 830, 34, 2, "#e4e4e7", "28px Arial");
 
-      let y = topBoxY + 198;
+      let y = 640;
       ctx.fillStyle = "#ffcc19";
       ctx.font = "900 30px Arial";
       ctx.fillText("STOP PLAN", 92, y);
@@ -3975,7 +3847,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
 
   useEffect(() => {
     setDraftOwnerNote(verification?.ownerNote || "");
-  }, [verification?.ownerNote, verificationKey]);
+  }, [verification?.ownerNote, verificationKey, verificationBaseKey]);
   return (
     <div
       ref={cardRef}
@@ -4047,14 +3919,12 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       )}
 
       <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
-        {(ownerMode || !isAi) && (
-          <button
-            onClick={() => onMarkFilled?.(anchor)}
-            className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
-          >
-            Mark Filled — Keep On Board
-          </button>
-        )}
+        <button
+          onClick={() => onMarkFilled?.(anchor)}
+          className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
+        >
+          Mark Filled — Keep On Board
+        </button>
         <button
           onClick={downloadCardScreenshot}
           className="w-full rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]"
@@ -4065,16 +3935,14 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
           onClick={() => onSubmitAnchor?.(anchor)}
           className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
         >
-          {ownerMode || !isAi ? "Submit / Report to Journal" : "Save to My Personal Journal"}
+          Submit / Report to Journal
         </button>
-        {(ownerMode || !isAi) && (
-          <button
-            onClick={() => onDismissAnchor?.(anchor)}
-            className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
-          >
-            Remove From Board
-          </button>
-        )}
+        <button
+          onClick={() => onDismissAnchor?.(anchor)}
+          className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
+        >
+          Remove From Board
+        </button>
       </div>
 
       {isAi && <EvidenceList evidence={evidence} />}
