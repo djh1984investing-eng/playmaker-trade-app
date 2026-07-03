@@ -34,6 +34,8 @@ const socialLinks = [
   { label: "Discord", href: "https://discord.com/channels/796158482431737906" }
 ];
 
+const HIGHLIGHT_VIDEO_URL = "https://www.youtube.com/embed/cBOf7gRdkXQ?start=548";
+
 
 const startingOptions = [
   "prevWeekLevel",
@@ -3129,6 +3131,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <HighlightVideo />
           <SocialLinks />
         </div>
 
@@ -3164,6 +3167,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <HighlightVideo />
           <SocialLinks />
           <button
             onClick={() => window.location.reload()}
@@ -4031,6 +4035,23 @@ function SocialLinks() {
             {link.label}
           </a>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function HighlightVideo() {
+  return (
+    <div className="mt-4 border-t border-zinc-800 pt-4">
+      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Playmaker Demo Video</div>
+      <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800 bg-[#090909]">
+        <iframe
+          className="aspect-video w-full"
+          src={HIGHLIGHT_VIDEO_URL}
+          title="Playmaker demo video"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+        />
       </div>
     </div>
   );
