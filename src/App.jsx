@@ -36,6 +36,49 @@ const socialLinks = [
 
 const HIGHLIGHT_VIDEO_URL = "https://www.youtube.com/embed/cBOf7gRdkXQ?start=548";
 
+const policyContent = {
+  privacy: {
+    title: "Privacy Policy",
+    body: [
+      "Playmaker collects account information such as your login email so you can access the app.",
+      "Payment and subscription access may be handled by Whop. Playmaker does not store your full payment card details.",
+      "The app may store trade journal entries, setup notes, screenshots, preferences, and access status so the product can work for your account.",
+      "Playmaker may use service providers such as Supabase, Whop, Vercel, Google, or similar tools to host the app, manage access, measure traffic, and improve the service.",
+      "Do not upload sensitive personal information that is not needed for your trading review workflow.",
+      "For privacy questions or account help, contact support."
+    ]
+  },
+  terms: {
+    title: "Terms of Use",
+    body: [
+      "By using Playmaker, you agree to use the app only for lawful personal or business trading workflow review.",
+      "You are responsible for keeping your login private and for all activity under your account.",
+      "Access may depend on an active purchase or subscription through the listed checkout provider.",
+      "Playmaker may change, suspend, or discontinue features as the product improves.",
+      "You may not copy, resell, attack, scrape, or misuse the app or its private systems.",
+      "These starter terms are provided for product clarity and should be reviewed by a qualified professional before heavy paid promotion."
+    ]
+  },
+  risk: {
+    title: "Trading Risk Disclaimer",
+    body: [
+      "Trading futures, stocks, options, crypto, and other markets involves substantial risk and is not suitable for every person.",
+      "Playmaker is a workflow, checklist, journal, and setup review tool. It does not provide personalized investment, legal, tax, or financial advice.",
+      "Playmaker does not guarantee profits, winning trades, accurate predictions, or any specific trading result.",
+      "You are responsible for your own trade decisions, risk controls, position sizing, and compliance with any rules that apply to you.",
+      "Past performance, examples, demos, screenshots, or educational content do not guarantee future results."
+    ]
+  },
+  contact: {
+    title: "Contact & Support",
+    body: [
+      "For help with Playmaker access, login, billing access, or product questions, contact support through the listed social channels or the purchase platform used for access.",
+      "Include the email address you used to purchase or register so support can look up your account faster.",
+      "For urgent billing or subscription issues, also check your Whop account or checkout receipt."
+    ]
+  }
+};
+
 
 const startingOptions = [
   "prevWeekLevel",
@@ -382,6 +425,7 @@ export default function PlaymakerSetupGrader() {
 const [authEmail, setAuthEmail] = useState("");
 const [authPassword, setAuthPassword] = useState("");
 const [authMessage, setAuthMessage] = useState("");
+const [policyView, setPolicyView] = useState(null);
 const signUp = async () => {
   const { error } = await supabase.auth.signUp({
     email: authEmail,
@@ -3133,9 +3177,11 @@ const exportJournalCSV = () => {
           </a>
           <HighlightVideo />
           <SocialLinks />
+          <PolicyLinks onOpen={setPolicyView} />
         </div>
 
       </div>
+      <PolicyModal policyKey={policyView} onClose={() => setPolicyView(null)} />
     </div>
   );
 }
@@ -3169,6 +3215,7 @@ const exportJournalCSV = () => {
           </a>
           <HighlightVideo />
           <SocialLinks />
+          <PolicyLinks onOpen={setPolicyView} />
           <button
             onClick={() => window.location.reload()}
             className="mt-3 w-full rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
@@ -3182,6 +3229,7 @@ const exportJournalCSV = () => {
             Sign Out
           </button>
         </div>
+        <PolicyModal policyKey={policyView} onClose={() => setPolicyView(null)} />
       </div>
     );
   }
@@ -4052,6 +4100,63 @@ function HighlightVideo() {
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
           allowFullScreen
         />
+      </div>
+    </div>
+  );
+}
+
+function PolicyLinks({ onOpen }) {
+  const links = [
+    { key: "privacy", label: "Privacy Policy" },
+    { key: "terms", label: "Terms" },
+    { key: "risk", label: "Risk Disclaimer" },
+    { key: "contact", label: "Contact" }
+  ];
+
+  return (
+    <div className="mt-4 border-t border-zinc-800 pt-4">
+      <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs">
+        {links.map((link) => (
+          <button
+            key={link.key}
+            type="button"
+            onClick={() => onOpen(link.key)}
+            className="font-bold text-zinc-400 underline-offset-4 hover:text-[#ffcc19] hover:underline"
+          >
+            {link.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PolicyModal({ policyKey, onClose }) {
+  const policy = policyContent[policyKey];
+  if (!policy) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-[#2c2300] bg-[#080808] p-5 text-left shadow-2xl shadow-black">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Playmaker</div>
+            <h2 className="mt-2 text-2xl font-black text-white">{policy.title}</h2>
+            <p className="mt-1 text-xs text-zinc-500">Last updated July 3, 2026</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-zinc-700 px-3 py-2 text-sm font-black text-zinc-300 hover:border-[#ffcc19] hover:text-[#ffcc19]"
+          >
+            Close
+          </button>
+        </div>
+        <div className="mt-5 space-y-3 text-sm leading-6 text-zinc-300">
+          {policy.body.map((paragraph) => (
+            <p key={paragraph}>{paragraph}</p>
+          ))}
+        </div>
       </div>
     </div>
   );
