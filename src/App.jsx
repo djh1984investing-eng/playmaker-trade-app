@@ -555,6 +555,32 @@ useEffect(() => {
     } catch (_err) {}
   };
 
+  const sendDiscordBoardNotice = async ({ event, title = "Playmaker Signal", detail = "", anchor = null }) => {
+    if (!ownerMode || !user) return;
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data?.session?.access_token;
+      if (!token) return;
+
+      const response = await fetch("/api/discord-signal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ event, title, detail, anchor })
+      });
+
+      if (!response.ok) {
+        const message = await response.text().catch(() => "");
+        console.error("Playmaker Discord notice failed:", response.status, message);
+      }
+    } catch (err) {
+      console.error("Playmaker Discord notice error:", err);
+    }
+  };
+
 
   const ownerMode = isOwnerUser(user);
   const [accessStatus, setAccessStatus] = useState("checking");
@@ -2716,6 +2742,7 @@ const exportJournalCSV = () => {
       createdAt: new Date().toISOString()
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
+    sendDiscordBoardNotice({ event: "FILLED", title: "Playmaker Signal Filled", detail, anchor: anchorSnapshot });
   };
 
   const dismissAnchorFromBoard = async (anchor) => {
@@ -2749,6 +2776,7 @@ const exportJournalCSV = () => {
       createdAt: new Date().toISOString()
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup removed", detail, "play maker set up removed");
+    sendDiscordBoardNotice({ event: "REMOVED", title: "Playmaker Signal Removed", detail, anchor });
   };
 
   const submitAnchorToJournal = async (anchor) => {
@@ -2817,6 +2845,7 @@ const exportJournalCSV = () => {
       createdAt: new Date().toISOString()
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup submitted", detail, "play maker setup submitted");
+    sendDiscordBoardNotice({ event: "SUBMITTED", title: "Playmaker Signal Submitted", detail, anchor: item });
 
     setSelectedTrade(null);
     clearTradeForm();
@@ -2878,6 +2907,9 @@ const exportJournalCSV = () => {
       submitted: false,
       anchor_snapshot: anchor
     })));
+
+    const detail = `${direction} ${fmtPrice(anchor.entry || anchor.price)} - verified by Mr. DJ Harrison${verification.ownerNote ? ` - ${verification.ownerNote}` : ""} - ${formatEastern(new Date())}`;
+    sendDiscordBoardNotice({ event: "VERIFIED", title: "Playmaker Signal Verified", detail, anchor: { ...anchor, verification } });
   };
 
   const removeAnchorVerification = async (anchor) => {
@@ -2900,6 +2932,9 @@ const exportJournalCSV = () => {
       owner_note: null,
       anchor_snapshot: anchor
     })));
+
+    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} - verification removed - ${formatEastern(new Date())}`;
+    sendDiscordBoardNotice({ event: "UNVERIFIED", title: "Playmaker Signal Verification Removed", detail, anchor });
   };
 
   const [manualLetter, manualText] = grade(report.score);
@@ -3050,7 +3085,7 @@ const exportJournalCSV = () => {
         if (!seenNotificationKeys[key]) {
           const title = ["A+", "A"].includes(gradeText) ? `New ${gradeText} ${directionText} setup` : `${gradeText} setup building`;
           const detail = `${directionText} ${priceText} • Grade ${gradeText} • Sources ${sources} • ${formatEastern(new Date())}`;
-          newNotices.push({ key, kind: "TRADE_ANCHOR", title, detail, createdAt: new Date().toISOString(), voice: "play maker new set up" });
+          newNotices.push({ key, kind: "TRADE_ANCHOR", title, detail, anchor, createdAt: new Date().toISOString(), voice: "play maker new set up" });
         }
       } else {
         const oldGrade = oldAnchor.grade || "";
@@ -3061,7 +3096,7 @@ const exportJournalCSV = () => {
           const key = `ADJUSTED-${anchorKey}-${oldGrade}-${gradeText}-${oldSources}-${sources}`;
           if (!seenNotificationKeys[key]) {
             const detail = `${directionText} ${priceText} • Grade ${oldGrade || "--"} → ${gradeText} • Sources ${oldSources} → ${sources} • ${formatEastern(new Date())}`;
-            newNotices.push({ key, kind: "ADJUSTED", title: "Playmaker setup adjustment", detail, createdAt: new Date().toISOString(), voice: "play maker set up adjustment" });
+            newNotices.push({ key, kind: "ADJUSTED", title: "Playmaker Signal Adjustment", detail, anchor, createdAt: new Date().toISOString(), voice: "play maker set up adjustment" });
           }
         }
       }
@@ -3077,7 +3112,7 @@ const exportJournalCSV = () => {
       const key = `REMOVED-${anchorKey}-${gradeText}-${sources}`;
       if (!seenNotificationKeys[key]) {
         const detail = `${directionText} ${priceText} • Grade ${gradeText} • Sources ${sources} • removed from board • ${formatEastern(new Date())}`;
-        newNotices.push({ key, kind: "REMOVED", title: "Playmaker setup removed", detail, createdAt: new Date().toISOString(), voice: "play maker set up removed" });
+        newNotices.push({ key, kind: "REMOVED", title: "Playmaker Signal Removed", detail, anchor: oldAnchor, createdAt: new Date().toISOString(), voice: "play maker set up removed" });
       }
     });
 
@@ -3085,6 +3120,7 @@ const exportJournalCSV = () => {
       setNotificationLog((prev) => [...newNotices, ...prev].slice(0, 50));
       setSeenNotificationKeys((prev) => ({ ...prev, ...Object.fromEntries(newNotices.map((n) => [n.key, true])) }));
       newNotices.forEach((notice) => notifyPlaymaker(notice.title, notice.detail, notice.voice));
+      newNotices.forEach((notice) => sendDiscordBoardNotice({ event: notice.kind, title: notice.title, detail: notice.detail, anchor: notice.anchor }));
     }
 
     previousAnchorMapRef.current = currentAnchorMap;
