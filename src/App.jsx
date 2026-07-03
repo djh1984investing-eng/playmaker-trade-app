@@ -26,6 +26,14 @@ const navTabs = [
   { id: "journal", label: "Journal" }
 ];
 
+const socialLinks = [
+  { label: "YouTube", href: "https://www.youtube.com/@TRADESWITHYOU" },
+  { label: "Facebook", href: "https://www.facebook.com/profile.php?id=61591225798882" },
+  { label: "Facebook Group", href: "https://www.facebook.com/profile.php?id=61578057606369" },
+  { label: "TikTok", href: "https://www.tiktok.com/@mr.djharrison" },
+  { label: "Discord", href: "https://discord.com/channels/796158482431737906" }
+];
+
 
 const startingOptions = [
   "prevWeekLevel",
@@ -3121,6 +3129,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <SocialLinks />
         </div>
 
       </div>
@@ -3155,6 +3164,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <SocialLinks />
           <button
             onClick={() => window.location.reload()}
             className="mt-3 w-full rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
@@ -4002,6 +4012,27 @@ function Tab({ id, tab, setTab, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function SocialLinks() {
+  return (
+    <div className="mt-4 border-t border-zinc-800 pt-4">
+      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Follow Playmaker</div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {socialLinks.map((link) => (
+          <a
+            key={`${link.label}-${link.href}`}
+            href={link.href}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-xl border border-zinc-800 bg-[#090909] px-3 py-2 text-center text-xs font-black text-zinc-300 transition hover:border-[#ffcc19] hover:text-[#ffcc19]"
+          >
+            {link.label}
+          </a>
+        ))}
+      </div>
+    </div>
   );
 }
 
