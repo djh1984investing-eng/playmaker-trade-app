@@ -17,6 +17,15 @@ const isOwnerUser = (user) => {
   return OWNER_EMAILS.some((owner) => text.includes(String(owner).toLowerCase()));
 };
 
+const navTabs = [
+  { id: "trade", label: "Trade Info" },
+  { id: "checklist", label: "Setup Checklist" },
+  { id: "settings", label: "AI Settings", ownerOnly: true },
+  { id: "behavior", label: "Behavior" },
+  { id: "breakdown", label: "Score Breakdown" },
+  { id: "journal", label: "Journal" }
+];
+
 
 const startingOptions = [
   "prevWeekLevel",
@@ -3166,7 +3175,26 @@ const exportJournalCSV = () => {
   return (
     <WhopGate>
     <div className="min-h-screen bg-[#080808] text-white">
-      <div className="relative mx-auto max-w-[1500px] p-4 md:p-6">
+      <div className="relative mx-auto flex max-w-[1680px] flex-col gap-5 p-4 md:p-6 xl:flex-row xl:items-start">
+        <aside className="z-20 rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/40 xl:sticky xl:top-6 xl:w-[260px] xl:shrink-0">
+          <div className="mb-4 border-b border-zinc-800 pb-4">
+            <div className="text-xs font-black uppercase tracking-[0.24em] text-[#ffcc19]">Playmaker</div>
+            <div className="mt-2 text-2xl font-black">Navigation</div>
+          </div>
+          <nav className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-1" aria-label="Playmaker sections">
+            {navTabs.filter((item) => !item.ownerOnly || ownerMode).map((item) => (
+              <Tab key={item.id} id={item.id} tab={tab} setTab={setTab}>
+                {item.label}
+              </Tab>
+            ))}
+          </nav>
+          <div className="mt-4 hidden rounded-2xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-400 xl:block">
+            <div className="font-black text-[#ffcc19]">Current section</div>
+            <div className="mt-1 text-sm font-black text-white">{navTabs.find((item) => item.id === tab)?.label || "Playmaker"}</div>
+          </div>
+        </aside>
+
+        <main className="min-w-0 flex-1">
         <div className="grid gap-5 lg:grid-cols-[1fr_230px]">
           <div>
             <div className="mb-5 flex items-center gap-2 text-[#ffcc19] font-black tracking-[0.24em] text-sm"><span className="text-2xl tracking-normal">👑</span><span>THE PLAYMAKER</span></div>
@@ -3281,17 +3309,6 @@ const exportJournalCSV = () => {
 
                   </>
         )}
-
-        <div className="mt-8 rounded-3xl border border-[#2c2300] bg-black p-2">
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-            <Tab id="trade" tab={tab} setTab={setTab}>Trade Info</Tab>
-            <Tab id="checklist" tab={tab} setTab={setTab}>Setup Checklist</Tab>
-            {ownerMode && <Tab id="settings" tab={tab} setTab={setTab}>AI Settings</Tab>}
-            <Tab id="behavior" tab={tab} setTab={setTab}>Behavior</Tab>
-            <Tab id="breakdown" tab={tab} setTab={setTab}>Score Breakdown</Tab>
-            <Tab id="journal" tab={tab} setTab={setTab}>Journal</Tab>
-          </div>
-        </div>
 
         <div className="mt-4 flex flex-wrap gap-3">
           <button onClick={exportSetup} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black shadow-lg shadow-yellow-950/30">Export Setup File</button>
@@ -3595,6 +3612,7 @@ const exportJournalCSV = () => {
             handleImageUpload={handleImageUpload}
           />
         )}
+        </main>
       </div>
     </div>
     </WhopGate>
@@ -3972,7 +3990,19 @@ function Dash({ label, value }) {
 }
 
 function Tab({ id, tab, setTab, children }) {
-  return <button onClick={() => setTab(id)} className={`rounded-xl px-4 py-3 font-bold ${tab === id ? "bg-white text-black" : "text-zinc-500 hover:text-white"}`}>{children}</button>;
+  const active = tab === id;
+  return (
+    <button
+      onClick={() => setTab(id)}
+      className={`min-h-12 rounded-2xl border px-4 py-3 text-left text-sm font-black transition ${
+        active
+          ? "border-[#ffcc19] bg-[#ffcc19] text-black shadow-lg shadow-yellow-950/30"
+          : "border-zinc-800 bg-[#090909] text-zinc-400 hover:border-[#ffcc19] hover:text-white"
+      }`}
+    >
+      {children}
+    </button>
+  );
 }
 
 function Card({ children, className = "" }) {
