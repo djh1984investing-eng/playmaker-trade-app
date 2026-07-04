@@ -1,10 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
 const OWNER_EMAILS = ["djh1984investing@gmail.com", "djharrison", "durrell", "djh1984investing-eng"];
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 const discordWebhookUrl = process.env.DISCORD_PLAYMAKER_SIGNALS_WEBHOOK_URL;
 const crownIconUrl = process.env.DISCORD_PLAYMAKER_CROWN_ICON_URL;
@@ -23,11 +22,11 @@ const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", det
   const sources = anchor.sourceCount || anchor.evidence?.length || anchor.rawSignal?.evidence?.length || "";
 
   const description = [
-    `**Event:** ${event}`,
-    direction ? `**Direction:** ${direction}` : null,
-    entry ? `**Entry:** ${entry}` : null,
-    grade ? `**Grade:** ${grade}` : null,
-    sources ? `**Sources:** ${sources}` : null,
+    `**Event:** ${String(event).slice(0, 80)}`,
+    direction ? `**Direction:** ${direction.slice(0, 24)}` : null,
+    entry ? `**Entry:** ${String(entry).slice(0, 40)}` : null,
+    grade ? `**Grade:** ${String(grade).slice(0, 24)}` : null,
+    sources ? `**Sources:** ${String(sources).slice(0, 12)}` : null,
     detail ? `**Details:** ${String(detail).slice(0, 700)}` : null
   ].filter(Boolean).join("\n");
 
@@ -39,7 +38,7 @@ const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", det
       avatar_url: crownIconUrl || undefined,
       embeds: [
         {
-          title: `👑 ${title}`,
+          title: `👑 ${String(title).slice(0, 110)}`,
           description,
           color: 16763929,
           timestamp: new Date().toISOString(),
@@ -58,8 +57,14 @@ const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", det
 };
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
+
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false, message: "POST only" });
+  }
+
+  if (!supabaseUrl || !supabaseKey) {
+    return res.status(500).json({ ok: false, message: "Supabase server config is missing" });
   }
 
   if (!discordWebhookUrl) {
