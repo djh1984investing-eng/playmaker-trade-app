@@ -34,7 +34,7 @@ const socialLinks = [
   { label: "Discord", href: "https://discord.com/channels/796158482431737906" }
 ];
 
-const HIGHLIGHT_VIDEO_URL = "https://www.youtube.com/embed/cBOf7gRdkXQ?start=548";
+const YOUTUBE_DEMO_URL = "https://www.youtube.com/watch?v=cBOf7gRdkXQ&t=548s";
 
 const policyContent = {
   privacy: {
@@ -4129,14 +4129,24 @@ function HighlightVideo() {
     <div className="mt-4 border-t border-zinc-800 pt-4">
       <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Playmaker Demo Video</div>
       <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800 bg-[#090909]">
-        <iframe
+        <video
           className="aspect-video w-full"
-          src={HIGHLIGHT_VIDEO_URL}
-          title="Playmaker demo video"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-        />
+          controls
+          playsInline
+          preload="metadata"
+          src="/playmaker-demo.mp4"
+        >
+          Your browser does not support the Playmaker demo video.
+        </video>
       </div>
+      <a
+        href={YOUTUBE_DEMO_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-3 inline-flex w-full justify-center rounded-xl border border-zinc-800 bg-[#090909] px-4 py-2 text-xs font-black text-zinc-300 transition hover:border-[#ffcc19] hover:text-[#ffcc19]"
+      >
+        Watch on YouTube
+      </a>
     </div>
   );
 }
