@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
+import { trackBuyAccessClick } from "./lib/googleTracking";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 const maxConfluenceDistancePoints = 15;
@@ -3207,6 +3208,7 @@ const exportJournalCSV = () => {
             href={WHOP_CHECKOUT_URL}
             target="_blank"
             rel="noreferrer"
+            onClick={trackBuyAccessClick}
             className="mt-3 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
           >
             Buy Playmaker Access
@@ -3245,6 +3247,7 @@ const exportJournalCSV = () => {
             href={WHOP_CHECKOUT_URL}
             target="_blank"
             rel="noreferrer"
+            onClick={trackBuyAccessClick}
             className="mt-5 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
           >
             Buy Playmaker Access
