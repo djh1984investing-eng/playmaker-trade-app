@@ -3492,6 +3492,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <AccessLevelNote />
           <HighlightVideo />
           <SocialLinks />
           <PolicyLinks onOpen={setPolicyView} />
@@ -3532,6 +3533,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <AccessLevelNote />
           <HighlightVideo />
           <SocialLinks />
           <PolicyLinks onOpen={setPolicyView} />
@@ -4514,6 +4516,17 @@ function PlaymakerTicker() {
           <span className="mx-8" aria-hidden="true">{infoMessage}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AccessLevelNote() {
+  return (
+    <div className="mt-3 rounded-xl border border-[#2c2300] bg-[#090909] px-4 py-3 text-left">
+      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Manual Level Grading Included</div>
+      <p className="mt-1 text-xs leading-relaxed text-zinc-300">
+        Enter your price, direction, 4H bias, and 1H bias to fetch the Playmaker grade for that level.
+      </p>
     </div>
   );
 }
