@@ -4472,75 +4472,6 @@ function Dash({ label, value }) {
   return <div className="rounded-2xl border border-[#2c2300] bg-black p-6 shadow-lg shadow-black/30"><div className="text-lg text-zinc-200">{label}</div><div className="mt-2 text-4xl font-black text-[#ffcc19]">{value}</div></div>;
 }
 
-const procedureSections = [
-  {
-    title: "1. Start With The Board",
-    steps: [
-      "Open Trade Info and review the highest graded Trade Anchors first.",
-      "Focus on A+ and A cards before watching B or C levels.",
-      "Check the entry stack, full cluster width, source count, and precision score."
-    ]
-  },
-  {
-    title: "2. Confirm The Level",
-    steps: [
-      "Make sure price is close enough to the setup area before chasing a move.",
-      "Review high-of-day and low-of-day reactions around the level.",
-      "Compare the level with stop size, limit placement, and confluence strength."
-    ]
-  },
-  {
-    title: "3. Use Manual Setup Review When Needed",
-    steps: [
-      "Go to Setup Checklist when you want to grade your own price.",
-      "Enter price, direction, 4H bias, and 1H bias, then fetch the grade.",
-      "Use the checklist to confirm whether the setup deserves action or patience."
-    ]
-  },
-  {
-    title: "4. Contract Size And Risk",
-    steps: [
-      "Use 7 micros for base setups when the plan uses a 10 point stop.",
-      "If the recommended stop needs more than 10 points, reduce size to 5 micros.",
-      "If there are multiple setups within 30 points, split the size across the levels instead of loading one price.",
-      "Example with 3 nearby levels: first limit 2 micros, second limit 2 micros, third limit 3 micros."
-    ]
-  },
-  {
-    title: "5. Failed Level And Retrace Rule",
-    steps: [
-      "If a level fails, derisk down to 2-3 micros.",
-      "For retracement plays, use 5 micros and wait for price to retrace to OTE or CE.",
-      "If there is another level below price on a short setup, wait for price to pass that level first.",
-      "After price passes the level, wait for a CE or OTE retrace on the 1 minute, 5 minute, or next session before acting."
-    ]
-  },
-  {
-    title: "6. Manage Order Cards",
-    steps: [
-      "Mark Filled when the order hits but still needs a journal result later.",
-      "Pull From Board when the setup is early, messy, or not ready right now.",
-      "Restore pulled orders if the limit is still valid, or delete them when the idea is no longer useful."
-    ]
-  },
-  {
-    title: "7. Verify And Journal",
-    steps: [
-      "Owner verification marks the card as reviewed by Mr. DJ Harrison.",
-      "Save Local Journal for your own private notes and result tracking.",
-      "Submit Global Journal only when the update should be shared to members."
-    ]
-  },
-  {
-    title: "8. Screenshot And Share",
-    steps: [
-      "Use Screenshot Card for social posts after review.",
-      "The screenshot keeps prices visible while protecting the private confluence names.",
-      "Add notes before posting so members understand why the setup matters."
-    ]
-  }
-];
-
 function Procedure() {
   return (
     <div className="mt-7 grid gap-5">
@@ -4548,37 +4479,12 @@ function Procedure() {
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="text-sm font-black uppercase tracking-[0.2em] text-[#ffcc19]">Playmaker Procedure</div>
-            <Title>Daily Workflow</Title>
+            <Title>Procedure</Title>
             <p className="mt-2 max-w-3xl text-zinc-300">
-              Follow this process before taking a setup, moving an order card, or posting a member update.
+              Procedure details will be added here.
             </p>
           </div>
-          <div className="rounded-2xl border border-[#00d27a] bg-[#001a0f] px-4 py-3 text-sm font-black text-[#00d27a]">
-            Review - Confirm - Execute - Journal
-          </div>
         </div>
-      </Card>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        {procedureSections.map((section) => (
-          <Card key={section.title}>
-            <h2 className="text-2xl font-black text-[#ffcc19]">{section.title}</h2>
-            <div className="mt-4 space-y-3">
-              {section.steps.map((step) => (
-                <div key={step} className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-sm text-zinc-200">
-                  {step}
-                </div>
-              ))}
-            </div>
-          </Card>
-        ))}
-      </div>
-
-      <Card>
-        <Title>Quick Rule</Title>
-        <p className="mt-2 text-zinc-300">
-          A strong Playmaker setup should have a clean level, tight enough entry stack, useful stop plan, correct contract size, and a reason to wait for price instead of chasing the candle.
-        </p>
       </Card>
     </div>
   );
