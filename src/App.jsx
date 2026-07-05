@@ -4498,7 +4498,25 @@ const procedureSections = [
     ]
   },
   {
-    title: "4. Manage Order Cards",
+    title: "4. Contract Size And Risk",
+    steps: [
+      "Use 7 micros for base setups when the plan uses a 10 point stop.",
+      "If the recommended stop needs more than 10 points, reduce size to 5 micros.",
+      "If there are multiple setups within 30 points, split the size across the levels instead of loading one price.",
+      "Example with 3 nearby levels: first limit 2 micros, second limit 2 micros, third limit 3 micros."
+    ]
+  },
+  {
+    title: "5. Failed Level And Retrace Rule",
+    steps: [
+      "If a level fails, derisk down to 2-3 micros.",
+      "For retracement plays, use 5 micros and wait for price to retrace to OTE or CE.",
+      "If there is another level below price on a short setup, wait for price to pass that level first.",
+      "After price passes the level, wait for a CE or OTE retrace on the 1 minute, 5 minute, or next session before acting."
+    ]
+  },
+  {
+    title: "6. Manage Order Cards",
     steps: [
       "Mark Filled when the order hits but still needs a journal result later.",
       "Pull From Board when the setup is early, messy, or not ready right now.",
@@ -4506,7 +4524,7 @@ const procedureSections = [
     ]
   },
   {
-    title: "5. Verify And Journal",
+    title: "7. Verify And Journal",
     steps: [
       "Owner verification marks the card as reviewed by Mr. DJ Harrison.",
       "Save Local Journal for your own private notes and result tracking.",
@@ -4514,7 +4532,7 @@ const procedureSections = [
     ]
   },
   {
-    title: "6. Screenshot And Share",
+    title: "8. Screenshot And Share",
     steps: [
       "Use Screenshot Card for social posts after review.",
       "The screenshot keeps prices visible while protecting the private confluence names.",
@@ -4559,7 +4577,7 @@ function Procedure() {
       <Card>
         <Title>Quick Rule</Title>
         <p className="mt-2 text-zinc-300">
-          A strong Playmaker setup should have a clean level, tight enough entry stack, useful stop plan, and a reason to wait for price instead of chasing the candle.
+          A strong Playmaker setup should have a clean level, tight enough entry stack, useful stop plan, correct contract size, and a reason to wait for price instead of chasing the candle.
         </p>
       </Card>
     </div>
