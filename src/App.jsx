@@ -487,6 +487,13 @@ useEffect(() => {
   const [editingCraterBoxId, setEditingCraterBoxId] = useState(null);
   const [aiLevelMessage, setAiLevelMessage] = useState("");
   const [form, setForm] = useState(getDefaultForm());
+  const [manualScanner, setManualScanner] = useState({
+    price: "",
+    direction: "Long",
+    bias4H: "Bullish",
+    bias1H: "Bullish"
+  });
+  const [manualScannerResult, setManualScannerResult] = useState(null);
   const [verifiedAnchors, setVerifiedAnchors] = useState({});
   const [notificationLog, setNotificationLog] = useState([]);
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
@@ -1859,6 +1866,139 @@ useEffect(() => {
       { name: "Manual Craters", count: craterBoxes.length }
     ];
   }, [scannerAiSignals, weeklyLevels, craterBoxes]);
+
+  const fetchManualLevelGrade = () => {
+    const price = parsePrice(manualScanner.price);
+    if (price === null) {
+      alert("Enter a price first.");
+      return;
+    }
+
+    const direction = manualScanner.direction || "Long";
+    const bias4H = manualScanner.bias4H || "Bullish";
+    const bias1H = manualScanner.bias1H || "Bullish";
+    const desiredDirection = String(direction).toLowerCase();
+    const directionBiasWord = desiredDirection.includes("short") ? "Bearish" : "Bullish";
+    const biasAligned = [bias4H, bias1H].filter((bias) => bias === directionBiasWord).length;
+    const mixedBias = bias4H !== bias1H;
+
+    const evidence = [
+      ...scannerAiSignals.flatMap(buildLevelEvidenceCandidates),
+      ...weeklyLevels.map((level) => ({
+        price: Number(level.price),
+        direction: "Both",
+        label: `Weekly ${level.name || "level"}`,
+        sourceType: "Weekly Level",
+        evidenceScore: 24
+      })),
+      ...craterBoxes.flatMap((box) => {
+        const top = Number(box.top_price);
+        const bottom = Number(box.bottom_price);
+        if (!Number.isFinite(top) || !Number.isFinite(bottom) || top <= 0 || bottom <= 0 || top === bottom) return [];
+        const high = Math.max(top, bottom);
+        const low = Math.min(top, bottom);
+        const mid = (high + low) / 2;
+        const width = Math.abs(high - low);
+        const inside = price <= high && price >= low;
+        return [{
+          price: inside ? price : mid,
+          direction: "Both",
+          label: `${box.name || "Crater"} ${inside ? "inside" : "mid"} ${fmt(width)} pts wide`,
+          sourceType: "Volume Crater / LVN",
+          evidenceScore: width >= 80 ? 30 : width >= 50 ? 24 : width >= 25 ? 17 : 11,
+          width
+        }];
+      })
+    ]
+      .map((item) => ({ ...item, parsedPrice: parsePrice(item.price) }))
+      .filter((item) => item.parsedPrice !== null)
+      .map((item) => ({ ...item, distance: Math.abs(item.parsedPrice - price) }))
+      .filter((item) => item.distance <= maxConfluenceDistancePoints)
+      .filter((item) => {
+        const itemDirection = String(item.direction || "Both").toLowerCase();
+        return itemDirection === "both" || itemDirection.includes(desiredDirection);
+      })
+      .sort((a, b) => a.distance - b.distance || Number(b.evidenceScore || 0) - Number(a.evidenceScore || 0));
+
+    const nearest = (test) => evidence.find(test);
+    const nearestWeekly = nearest((item) => item.sourceType === "Weekly Level");
+    const nearestLvn = nearest((item) => String(item.sourceType).includes("LVN") || String(item.sourceType).includes("Crater"));
+    const nearestPlaymaker = nearest((item) => item.sourceType === "PlayMaker Confluence");
+    const nearestSession = nearest((item) => item.sourceType === "Major Session Deviation" || item.sourceType === "Session Deviation");
+    const nearest1H = nearest((item) => String(item.sourceType).includes("1H STDV"));
+    const nearest4H = nearest((item) => String(item.sourceType).includes("4H STDV") || String(item.sourceType).includes("Daily STDV"));
+    const nearest15Retrace = nearest((item) => item.sourceType === "OTE Retracement" && String(item.label).includes("15m"));
+    const nearest1HRetrace = nearest((item) => item.sourceType === "OTE Retracement" && String(item.label).includes("1H"));
+    const nearest4HRetrace = nearest((item) => item.sourceType === "OTE Retracement" && (String(item.label).includes("4H") || String(item.label).includes("D")));
+    const nearestOrderBlock = nearest((item) => item.sourceType === "Order Block");
+    const nearestRejectionBlock = nearest((item) => item.sourceType === "Rejection Block");
+    const nearestPoc = nearest((item) => String(item.sourceType).includes("POC"));
+    const nearestVp = nearest((item) => String(item.sourceType).startsWith("Volume Profile"));
+
+    setStartingLevel("");
+    setSelectedTrade(null);
+    setEditingId(null);
+    setForm((prev) => ({
+      ...prev,
+      tradeEntryPrice: String(price),
+      direction,
+      bias4H,
+      bias1H,
+      trend: biasAligned === 2 ? "With Trend" : biasAligned === 0 ? "Against Trend" : "Neutral",
+      prevWeekLevelOn: nearestWeekly ? "Yes" : "No",
+      prevWeekLevelAway: nearestWeekly ? String(fmt(nearestWeekly.distance)) : prev.prevWeekLevelAway,
+      lowVolumeNodeOn: nearestLvn ? "Yes" : "No",
+      lowVolumeNodeWidth: nearestLvn?.width ? String(fmt(nearestLvn.width)) : prev.lowVolumeNodeWidth,
+      lowVolumeNodeAway: nearestLvn ? String(fmt(nearestLvn.distance)) : prev.lowVolumeNodeAway,
+      playMakerSignalOn: nearestPlaymaker ? "Yes" : "No",
+      playMakerSignalAway: nearestPlaymaker ? String(fmt(nearestPlaymaker.distance)) : prev.playMakerSignalAway,
+      prevSessionSTDVOn: nearestSession ? "Yes" : "No",
+      prevSessionSTDVAway: nearestSession ? String(fmt(nearestSession.distance)) : prev.prevSessionSTDVAway,
+      prevSessionSTDVValue: nearestSession ? String(Math.max(1, deviationAbsFromLabel(nearestSession.label) || 3)) : prev.prevSessionSTDVValue,
+      oneHSTDVOn: nearest1H ? "Yes" : "No",
+      oneHSTDVAway: nearest1H ? String(fmt(nearest1H.distance)) : prev.oneHSTDVAway,
+      oneHSTDVValue: nearest1H ? String(Math.max(1, deviationAbsFromLabel(nearest1H.label) || 2)) : prev.oneHSTDVValue,
+      fourHSTDVOn: nearest4H ? "Yes" : "No",
+      fourHSTDVAway: nearest4H ? String(fmt(nearest4H.distance)) : prev.fourHSTDVAway,
+      fourHSTDVValue: nearest4H ? String(Math.max(1, deviationAbsFromLabel(nearest4H.label) || 3)) : prev.fourHSTDVValue,
+      retrace15mOn: nearest15Retrace ? "Yes" : "No",
+      retrace15mAway: nearest15Retrace ? String(fmt(nearest15Retrace.distance)) : prev.retrace15mAway,
+      retrace15mValue: nearest15Retrace ? normalizeRetrace(nearest15Retrace.label) : prev.retrace15mValue,
+      retrace1HOn: nearest1HRetrace ? "Yes" : "No",
+      retrace1HAway: nearest1HRetrace ? String(fmt(nearest1HRetrace.distance)) : prev.retrace1HAway,
+      retrace1HValue: nearest1HRetrace ? normalizeRetrace(nearest1HRetrace.label) : prev.retrace1HValue,
+      retrace4HOn: nearest4HRetrace ? "Yes" : "No",
+      retrace4HAway: nearest4HRetrace ? String(fmt(nearest4HRetrace.distance)) : prev.retrace4HAway,
+      retrace4HValue: nearest4HRetrace ? normalizeRetrace(nearest4HRetrace.label) : prev.retrace4HValue,
+      orderBlockOn: nearestOrderBlock ? "Yes" : "No",
+      orderBlockAway: nearestOrderBlock ? String(fmt(nearestOrderBlock.distance)) : prev.orderBlockAway,
+      orderBlockTF: nearestOrderBlock ? (timeframeFromPayload(nearestOrderBlock.payload, nearestOrderBlock.label) || prev.orderBlockTF) : prev.orderBlockTF,
+      rejectionBlockOn: nearestRejectionBlock ? "Yes" : "No",
+      rejectionBlockAway: nearestRejectionBlock ? String(fmt(nearestRejectionBlock.distance)) : prev.rejectionBlockAway,
+      rejectionBlockTF: nearestRejectionBlock ? (timeframeFromPayload(nearestRejectionBlock.payload, nearestRejectionBlock.label) || prev.rejectionBlockTF) : prev.rejectionBlockTF,
+      ltfVolNodeOn: nearestVp ? "Yes" : "No",
+      ltfVolNodeAway: nearestVp ? String(fmt(nearestVp.distance)) : prev.ltfVolNodeAway,
+      liquidityOn: nearestPoc ? "Yes" : "No",
+      notes: [
+        `Manual scan ${direction} at ${fmtPrice(price)}.`,
+        `4H ${bias4H}, 1H ${bias1H}${mixedBias ? " (mixed bias)" : ""}.`,
+        evidence.length ? `Found ${evidence.length} nearby source(s).` : "No stored confluences found within 15 points."
+      ].join(" ")
+    }));
+
+    setManualScannerResult({
+      price,
+      direction,
+      bias4H,
+      bias1H,
+      evidence,
+      biasAligned,
+      message: evidence.length
+        ? `Found ${evidence.length} source(s) within ${maxConfluenceDistancePoints} points.`
+        : "No stored confluence found near that price yet."
+    });
+    setTab("checklist");
+  };
 
   const report = useMemo(() => {
     const rows = [];
@@ -3578,6 +3718,45 @@ const exportJournalCSV = () => {
 
         {tab === "checklist" && (
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
+            <Card className="lg:col-span-2">
+              <Title>Manual Level Scanner</Title>
+              <div className="mt-5 grid gap-4 md:grid-cols-5">
+                <Field label="Price" value={manualScanner.price} onChange={(v) => setManualScanner((s) => ({ ...s, price: v }))} />
+                <Select label="Direction" value={manualScanner.direction} options={["Long", "Short"]} onChange={(v) => setManualScanner((s) => ({ ...s, direction: v }))} />
+                <Select label="4H Bias" value={manualScanner.bias4H} options={["Bullish", "Bearish"]} onChange={(v) => setManualScanner((s) => ({ ...s, bias4H: v }))} />
+                <Select label="1H Bias" value={manualScanner.bias1H} options={["Bullish", "Bearish"]} onChange={(v) => setManualScanner((s) => ({ ...s, bias1H: v }))} />
+                <button onClick={fetchManualLevelGrade} className="self-end rounded-xl bg-[#00d27a] px-5 py-3 font-black text-black">
+                  Fetch Grade
+                </button>
+              </div>
+              {manualScannerResult && (
+                <div className="mt-5 rounded-2xl border border-zinc-800 bg-[#090909] p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="font-black text-[#ffcc19]">{manualScannerResult.message}</div>
+                      <div className="mt-1 text-sm text-zinc-400">
+                        {manualScannerResult.direction} {fmtPrice(manualScannerResult.price)} - 4H {manualScannerResult.bias4H} - 1H {manualScannerResult.bias1H}
+                      </div>
+                    </div>
+                    <div className={`rounded-full px-3 py-2 text-xs font-black ${manualScannerResult.biasAligned === 2 ? "bg-[#00d27a] text-black" : manualScannerResult.biasAligned === 1 ? "bg-[#ffcc19] text-black" : "bg-red-950 text-red-300"}`}>
+                      {manualScannerResult.biasAligned === 2 ? "BIAS ALIGNED" : manualScannerResult.biasAligned === 1 ? "MIXED BIAS" : "AGAINST BIAS"}
+                    </div>
+                  </div>
+                  <div className="mt-4 grid gap-2 md:grid-cols-3">
+                    {manualScannerResult.evidence.slice(0, 9).map((item, idx) => (
+                      <div key={`${item.sourceType}-${item.label}-${idx}`} className="rounded-xl border border-zinc-800 bg-black p-3 text-xs">
+                        <div className="font-black text-white">{item.sourceType}</div>
+                        <div className="mt-1 text-zinc-400">{item.label}</div>
+                        <div className="mt-1 text-[#00d27a]">{fmtPrice(item.parsedPrice)} - {fmt(item.distance)} pts away</div>
+                      </div>
+                    ))}
+                    {manualScannerResult.evidence.length === 0 && (
+                      <div className="text-sm text-zinc-500">No saved TradingView confluence, weekly level, or crater box was found within 15 points.</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </Card>
             <Conf title="Previous Week Level" base="9" active={form.prevWeekLevelOn} onActive={(v) => set("prevWeekLevelOn", v)}>
               <StartControl k="prevWeekLevel" startingLevel={startingLevel} setStart={setStart} disabled={startDisabled("prevWeekLevel")} />
               <Away k="prevWeekLevel" form={form} set={set} startingLevel={startingLevel} />
