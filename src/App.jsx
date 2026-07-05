@@ -4487,8 +4487,9 @@ function Tab({ id, tab, setTab, children }) {
 
 function PlaymakerTicker() {
   const message = [
-    "Welcome to Playmaker: built for traders who plan the level before the move",
-    "Scan price, direction, 4H bias, and 1H bias for a cleaner setup grade",
+    "Welcome to Playmaker: automatic signals and manual setup grading in one workflow",
+    "TradingView alerts feed Playmaker signals while you can still grade your own manual levels",
+    "Scan price, direction, 4H bias, and 1H bias for a cleaner manual setup grade",
     "Track high-of-day and low-of-day reactions before chasing the candle",
     "Review limit entries, stop plans, and confluence strength before execution",
     "Pulled orders stay parked when the idea is early but the level is still valid",
