@@ -4575,7 +4575,7 @@ function SocialLinks() {
             key={`${link.label}-${link.href}`}
             href={link.href}
             target="_blank"
-            rel="noreferrer"
+            rel="me noreferrer"
             className="rounded-xl border border-zinc-800 bg-[#090909] px-3 py-2 text-center text-xs font-black text-zinc-300 transition hover:border-[#ffcc19] hover:text-[#ffcc19]"
           >
             {link.label}
