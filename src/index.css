@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+.playmaker-ticker-track {
+  display: inline-flex;
+  min-width: max-content;
+  animation: playmaker-ticker-scroll 32s linear infinite;
+}
+
+@keyframes playmaker-ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}

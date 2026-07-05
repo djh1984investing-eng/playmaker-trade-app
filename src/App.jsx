@@ -3433,7 +3433,9 @@ const exportJournalCSV = () => {
 
   if (!user) {
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center">
+    <div className="min-h-screen bg-black text-white flex items-center justify-center p-6 pt-16 pb-16">
+      <PlaymakerTicker position="top" />
+      <PlaymakerTicker position="bottom" />
       <div className="w-full max-w-md p-6 rounded-xl border border-yellow-500 bg-[#080808]">
 
         <h1 className="text-3xl font-bold text-[#ffcc19] mb-4">
@@ -3515,7 +3517,9 @@ const exportJournalCSV = () => {
 
   if (accessStatus === "blocked") {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6 pt-16 pb-16">
+        <PlaymakerTicker position="top" />
+        <PlaymakerTicker position="bottom" />
         <div className="w-full max-w-md rounded-xl border border-[#ffcc19] bg-[#080808] p-6 text-center">
           <div className="text-3xl font-black text-[#ffcc19]">Playmaker Access Required</div>
           <p className="mt-3 text-zinc-300">{accessMessage}</p>
@@ -4115,6 +4119,12 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       const stopLines = Array.isArray(anchor.stopPlans)
         ? anchor.stopPlans.slice(0, 3).map((plan) => `${plan.stop}pt: Limit ${fmtPrice(plan.limit)} | Stop ${fmtPrice(plan.stopArea)}${plan.valid === false ? " | Too tight" : ""}`)
         : [];
+      const protectedEvidence = topEvidence.slice(0, 5).map((line, idx) => {
+        const priceText = String(line).split("@").pop()?.trim() || "--";
+        return `Protected confluence ${idx + 1} @ ${priceText}`;
+      });
+      const verificationText = verifiedLabel || "Not verified by Mr. DJ Harrison yet";
+      const ownerNote = verification?.ownerNote || "";
 
       const canvas = document.createElement("canvas");
       const width = 1080;
@@ -4218,7 +4228,16 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       ctx.fillText("ENTRY STACK", 122, 488);
       wrapText(clusterText, 122, 530, 830, 34, 2, "#e4e4e7", "28px Arial");
 
-      let y = 640;
+      fillRoundRect(92, 600, 896, ownerNote ? 128 : 84, 22, verification?.verified ? "#001a0f" : "#111111", verification?.verified ? "#00d27a" : "#27272a");
+      ctx.fillStyle = verification?.verified ? "#00d27a" : "#a1a1aa";
+      ctx.font = "900 26px Arial";
+      ctx.fillText(verification?.verified ? "VERIFIED" : "UNVERIFIED", 122, 648);
+      wrapText(verificationText, 282, 648, 670, 30, 1, "#ffffff", "24px Arial");
+      if (ownerNote) {
+        wrapText(`Note: ${ownerNote}`, 122, 690, 830, 30, 2, "#d4d4d8", "22px Arial");
+      }
+
+      let y = ownerNote ? 770 : 722;
       ctx.fillStyle = "#ffcc19";
       ctx.font = "900 30px Arial";
       ctx.fillText("STOP PLAN", 92, y);
@@ -4242,11 +4261,11 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       y += 20;
       ctx.fillStyle = "#ffcc19";
       ctx.font = "900 30px Arial";
-      ctx.fillText("CONFLUENCES", 92, y);
+      ctx.fillText("PROTECTED CONFLUENCES", 92, y);
       y += 48;
 
-      if (topEvidence.length) {
-        topEvidence.forEach((line) => {
+      if (protectedEvidence.length) {
+        protectedEvidence.forEach((line) => {
           y = wrapText(line, 92, y, 896, 34, 2, "#d4d4d8", "24px Arial") + 8;
         });
       } else {
@@ -4464,6 +4483,28 @@ function Tab({ id, tab, setTab, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function PlaymakerTicker({ position = "top" }) {
+  const message = [
+    "Welcome to Playmaker",
+    "Use price, direction, 4H bias, and 1H bias to fetch a grade",
+    "Track high of day and low of day reactions",
+    "Review stop plans before using a limit",
+    "Pulled orders stay saved when the limit is still good",
+    "Local journal is private",
+    "Global journal sends member notice",
+    "Trading involves risk"
+  ].join("   |   ");
+
+  return (
+    <div className={`fixed left-0 right-0 z-40 overflow-hidden border-[#2c2300] bg-black/95 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19] ${position === "bottom" ? "bottom-0 border-t" : "top-0 border-b"}`}>
+      <div className="playmaker-ticker-track whitespace-nowrap">
+        <span className="mx-8">{message}</span>
+        <span className="mx-8" aria-hidden="true">{message}</span>
+      </div>
+    </div>
   );
 }
 
