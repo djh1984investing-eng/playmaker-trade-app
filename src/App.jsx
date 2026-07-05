@@ -3478,7 +3478,7 @@ const exportJournalCSV = () => {
           {authMessage}
         </p>
 
-        <PlaymakerTicker />
+        <PlaymakerPromoTicker />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3492,7 +3492,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
-          <AccessLevelNote />
+          <PlaymakerInfoTicker />
           <HighlightVideo />
           <SocialLinks />
           <PolicyLinks onOpen={setPolicyView} />
@@ -3523,7 +3523,7 @@ const exportJournalCSV = () => {
           <div className="text-3xl font-black text-[#ffcc19]">Playmaker Access Required</div>
           <p className="mt-3 text-zinc-300">{accessMessage}</p>
           <p className="mt-2 text-sm text-zinc-500">Use the same email you purchased with on Whop.</p>
-          <PlaymakerTicker />
+          <PlaymakerPromoTicker />
           <a
             href={WHOP_CHECKOUT_URL}
             target="_blank"
@@ -3533,7 +3533,7 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
-          <AccessLevelNote />
+          <PlaymakerInfoTicker />
           <HighlightVideo />
           <SocialLinks />
           <PolicyLinks onOpen={setPolicyView} />
@@ -4487,46 +4487,39 @@ function Tab({ id, tab, setTab, children }) {
   );
 }
 
-function PlaymakerTicker() {
-  const infoMessage = [
-    "Welcome to Playmaker: automatic signals and manual setup grading in one workflow",
-    "TradingView alerts feed Playmaker signals while you can still grade your own manual levels",
-    "Track high-of-day and low-of-day reactions before chasing the candle",
-    "Review limit entries, stop plans, and confluence strength before execution",
-    "Pulled orders stay parked when the idea is early but the level is still valid",
-    "Local journal keeps your private notes; global journal shares member updates",
-    "Trade with structure, protect risk, and let the setup prove itself"
-  ].join("   |   ");
-  const promoMessage = [
-    "Follow and like all Playmaker social pages to receive 50% off your first month",
-    "New members get a 1-on-1 30 minute StreamYard tutorial with Mr. DJ Harrison"
-  ].join("   |   ");
+const playmakerInfoMessage = [
+  "Welcome to Playmaker: automatic signals and manual setup grading in one workflow",
+  "TradingView alerts feed Playmaker signals while you can still grade your own manual levels",
+  "Track high-of-day and low-of-day reactions before chasing the candle",
+  "Review limit entries, stop plans, and confluence strength before execution",
+  "Pulled orders stay parked when the idea is early but the level is still valid",
+  "Local journal keeps your private notes; global journal shares member updates",
+  "Trade with structure, protect risk, and let the setup prove itself"
+].join("   |   ");
 
+const playmakerPromoMessage = [
+  "Follow and like all Playmaker social pages to receive 50% off your first month",
+  "New members get a 1-on-1 30 minute StreamYard tutorial with Mr. DJ Harrison"
+].join("   |   ");
+
+function PlaymakerPromoTicker() {
   return (
-    <div className="mt-4 space-y-2">
-      <div className="overflow-hidden rounded-2xl border-2 border-[#00d27a] bg-[#001a0f] py-4 text-base font-black uppercase tracking-[0.18em] text-[#00d27a] shadow-xl shadow-green-950/40">
-        <div className="playmaker-ticker-track whitespace-nowrap">
-          <span className="mx-8">{promoMessage}</span>
-          <span className="mx-8" aria-hidden="true">{promoMessage}</span>
-        </div>
-      </div>
-      <div className="overflow-hidden rounded-xl border border-[#2c2300] bg-black py-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#ffcc19]">
-        <div className="playmaker-ticker-track whitespace-nowrap">
-          <span className="mx-8">{infoMessage}</span>
-          <span className="mx-8" aria-hidden="true">{infoMessage}</span>
-        </div>
+    <div className="mt-4 overflow-hidden rounded-2xl border-2 border-[#00d27a] bg-[#001a0f] py-4 text-base font-black uppercase tracking-[0.18em] text-[#00d27a] shadow-xl shadow-green-950/40">
+      <div className="playmaker-ticker-track whitespace-nowrap">
+        <span className="mx-8">{playmakerPromoMessage}</span>
+        <span className="mx-8" aria-hidden="true">{playmakerPromoMessage}</span>
       </div>
     </div>
   );
 }
 
-function AccessLevelNote() {
+function PlaymakerInfoTicker() {
   return (
-    <div className="mt-3 rounded-xl border border-[#2c2300] bg-[#090909] px-4 py-3 text-left">
-      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Playmaker Level Access</div>
-      <p className="mt-1 text-xs leading-relaxed text-zinc-300">
-        Unlock Playmaker signals, level checks, journals, and member tools after purchase.
-      </p>
+    <div className="mt-3 overflow-hidden rounded-xl border border-[#2c2300] bg-black py-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#ffcc19]">
+      <div className="playmaker-ticker-track whitespace-nowrap">
+        <span className="mx-8">{playmakerInfoMessage}</span>
+        <span className="mx-8" aria-hidden="true">{playmakerInfoMessage}</span>
+      </div>
     </div>
   );
 }
