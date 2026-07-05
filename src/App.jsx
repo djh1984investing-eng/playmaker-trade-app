@@ -4502,16 +4502,16 @@ function PlaymakerTicker() {
 
   return (
     <div className="mt-4 space-y-2">
-      <div className="overflow-hidden rounded-xl border border-[#2c2300] bg-black py-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#ffcc19]">
-        <div className="playmaker-ticker-track whitespace-nowrap">
-          <span className="mx-8">{infoMessage}</span>
-          <span className="mx-8" aria-hidden="true">{infoMessage}</span>
-        </div>
-      </div>
       <div className="overflow-hidden rounded-2xl border-2 border-[#00d27a] bg-[#001a0f] py-4 text-base font-black uppercase tracking-[0.18em] text-[#00d27a] shadow-xl shadow-green-950/40">
         <div className="playmaker-ticker-track whitespace-nowrap">
           <span className="mx-8">{promoMessage}</span>
           <span className="mx-8" aria-hidden="true">{promoMessage}</span>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-[#2c2300] bg-black py-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#ffcc19]">
+        <div className="playmaker-ticker-track whitespace-nowrap">
+          <span className="mx-8">{infoMessage}</span>
+          <span className="mx-8" aria-hidden="true">{infoMessage}</span>
         </div>
       </div>
     </div>
@@ -4542,7 +4542,7 @@ function SocialLinks() {
 function HighlightVideo() {
   return (
     <div className="mt-4 border-t border-zinc-800 pt-4">
-      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Playmaker Tutorial Video</div>
+      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Last Week's Highlights</div>
       <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800 bg-[#090909]">
         <video
           className="aspect-video w-full"
@@ -4551,7 +4551,7 @@ function HighlightVideo() {
           preload="metadata"
           src="/playmaker-demo.mp4"
         >
-          Your browser does not support the Playmaker tutorial video.
+          Your browser does not support the Playmaker highlights video.
         </video>
       </div>
       <a
@@ -4560,7 +4560,7 @@ function HighlightVideo() {
         rel="noreferrer"
         className="mt-3 inline-flex w-full justify-center rounded-xl border border-zinc-800 bg-[#090909] px-4 py-2 text-xs font-black text-zinc-300 transition hover:border-[#ffcc19] hover:text-[#ffcc19]"
       >
-        Watch on YouTube
+        Tutorial Video
       </a>
     </div>
   );
