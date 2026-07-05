@@ -29,8 +29,8 @@ const navTabs = [
 
 const socialLinks = [
   { label: "YouTube", href: "https://www.youtube.com/@TRADESWITHYOU" },
-  { label: "Facebook", href: "https://www.facebook.com/profile.php?id=61591225798882" },
-  { label: "Facebook Group", href: "https://www.facebook.com/profile.php?id=61578057606369" },
+  { label: "Facebook Group", href: "https://www.facebook.com/profile.php?id=61591225798882" },
+  { label: "Facebook Page", href: "https://www.facebook.com/profile.php?id=61578057606369" },
   { label: "TikTok", href: "https://www.tiktok.com/@mr.djharrison" },
   { label: "Discord", href: "https://discord.com/channels/796158482431737906" }
 ];
@@ -4531,7 +4531,7 @@ function SocialLinks() {
 function HighlightVideo() {
   return (
     <div className="mt-4 border-t border-zinc-800 pt-4">
-      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Playmaker Demo Video</div>
+      <div className="text-xs font-black uppercase tracking-[0.16em] text-[#ffcc19]">Playmaker Tutorial Video</div>
       <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800 bg-[#090909]">
         <video
           className="aspect-video w-full"
@@ -4540,7 +4540,7 @@ function HighlightVideo() {
           preload="metadata"
           src="/playmaker-demo.mp4"
         >
-          Your browser does not support the Playmaker demo video.
+          Your browser does not support the Playmaker tutorial video.
         </video>
       </div>
       <a
