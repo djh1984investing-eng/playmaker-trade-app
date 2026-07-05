@@ -4499,7 +4499,7 @@ function PlaymakerTicker() {
   ].join("   |   ");
 
   return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-[#00d27a] bg-[#001a0f] py-3 text-sm font-black uppercase tracking-[0.16em] text-[#00d27a] shadow-lg shadow-green-950/30">
+    <div className="mt-4 overflow-hidden rounded-2xl border-2 border-[#00d27a] bg-[#001a0f] py-4 text-base font-black uppercase tracking-[0.18em] text-[#00d27a] shadow-xl shadow-green-950/40">
       <div className="playmaker-ticker-track whitespace-nowrap">
         <span className="mx-8">{message}</span>
         <span className="mx-8" aria-hidden="true">{message}</span>
