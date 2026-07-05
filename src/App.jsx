@@ -704,19 +704,27 @@ useEffect(() => {
   }, [ownerSignalNotes]);
 
   useEffect(() => {
+    if (!user) return;
     try {
       const saved = JSON.parse(localStorage.getItem("playmaker_submitted_anchor_keys") || "{}");
-      if (saved && typeof saved === "object") setSubmittedAnchorKeys(saved);
+      if (ownerMode && saved && typeof saved === "object") {
+        setSubmittedAnchorKeys(saved);
+      } else if (!ownerMode) {
+        localStorage.removeItem("playmaker_submitted_anchor_keys");
+        setSubmittedAnchorKeys({});
+      }
     } catch (_err) {}
-  }, []);
+  }, [user, ownerMode]);
 
   useEffect(() => {
+    if (!ownerMode) return;
     try {
       localStorage.setItem("playmaker_submitted_anchor_keys", JSON.stringify(submittedAnchorKeys));
     } catch (_err) {}
-  }, [submittedAnchorKeys]);
+  }, [submittedAnchorKeys, ownerMode]);
 
   useEffect(() => {
+    if (!ownerMode) return;
     // Rebuild hidden/submitted anchor keys from reported/closed journal rows.
     // This stops a submitted setup from returning after refresh/deploy.
     setSubmittedAnchorKeys((prev) => {
@@ -740,33 +748,47 @@ useEffect(() => {
       });
       return next;
     });
-  }, [journal]);
+  }, [journal, ownerMode]);
 
   useEffect(() => {
+    if (!user) return;
     try {
       const saved = JSON.parse(localStorage.getItem("playmaker_filled_anchor_keys") || "{}");
-      if (saved && typeof saved === "object") setFilledAnchorKeys(saved);
+      if (ownerMode && saved && typeof saved === "object") {
+        setFilledAnchorKeys(saved);
+      } else if (!ownerMode) {
+        localStorage.removeItem("playmaker_filled_anchor_keys");
+        setFilledAnchorKeys({});
+      }
     } catch (_err) {}
-  }, []);
+  }, [user, ownerMode]);
 
   useEffect(() => {
+    if (!ownerMode) return;
     try {
       localStorage.setItem("playmaker_filled_anchor_keys", JSON.stringify(filledAnchorKeys));
     } catch (_err) {}
-  }, [filledAnchorKeys]);
+  }, [filledAnchorKeys, ownerMode]);
 
   useEffect(() => {
+    if (!user) return;
     try {
       const saved = JSON.parse(localStorage.getItem("playmaker_pulled_anchor_keys") || "{}");
-      if (saved && typeof saved === "object") setPulledAnchorKeys(saved);
+      if (ownerMode && saved && typeof saved === "object") {
+        setPulledAnchorKeys(saved);
+      } else if (!ownerMode) {
+        localStorage.removeItem("playmaker_pulled_anchor_keys");
+        setPulledAnchorKeys({});
+      }
     } catch (_err) {}
-  }, []);
+  }, [user, ownerMode]);
 
   useEffect(() => {
+    if (!ownerMode) return;
     try {
       localStorage.setItem("playmaker_pulled_anchor_keys", JSON.stringify(pulledAnchorKeys));
     } catch (_err) {}
-  }, [pulledAnchorKeys]);
+  }, [pulledAnchorKeys, ownerMode]);
 
   // Global verification/note sync from Supabase.
   // This keeps Mr. DJ Harrison verification badges and owner notes visible
@@ -2899,6 +2921,7 @@ const exportJournalCSV = () => {
   const submittedZoneMatches = (zone) => {
     const submittedRecord = submittedRecordForAnchor(zone);
     if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
+    if (!ownerMode) return false;
 
     const zonePrice = parsePrice(zone?.price || zone?.entry);
     const zoneDirection = String(zone?.direction || "BOTH").toUpperCase();
@@ -3044,9 +3067,9 @@ const exportJournalCSV = () => {
     if (!anchor) return;
     const isGlobalSubmit = scope === "global";
 
-    // Hide it immediately before the database round trip so the same card cannot
-    // rebuild on the board while Supabase is saving.
-    const hidden = markAnchorHiddenNow(anchor);
+    // Owner board actions hide cards; member local journal saves should not
+    // change which shared signal cards are visible.
+    const hidden = ownerMode ? markAnchorHiddenNow(anchor) : null;
 
     const payload = anchor.rawSignal || anchor.payload || {};
     const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
@@ -4380,6 +4403,8 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
         {isPulled && (
           <>
+            {ownerMode && (
+              <>
             <button
               onClick={() => onRestoreAnchor?.(anchor)}
               className="w-full rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black hover:bg-[#36ff9f]"
@@ -4392,6 +4417,8 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
             >
               Delete From Pulled Orders
             </button>
+              </>
+            )}
             <button
               onClick={() => onSubmitAnchor?.(anchor, "local")}
               className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
@@ -4410,12 +4437,14 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         )}
         {!isPulled && (
           <>
+        {ownerMode && (
         <button
           onClick={() => onMarkFilled?.(anchor)}
           className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
         >
           Mark Filled — Keep On Board
         </button>
+        )}
         <button
           onClick={downloadCardScreenshot}
           className="w-full rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]"
@@ -4436,12 +4465,14 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
             Submit Global Journal
           </button>
         )}
-        <button
-          onClick={() => onDismissAnchor?.(anchor)}
-          className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
-        >
-          Pull From Board
-        </button>
+        {ownerMode && (
+          <button
+            onClick={() => onDismissAnchor?.(anchor)}
+            className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
+          >
+            Pull From Board
+          </button>
+        )}
           </>
         )}
       </div>
