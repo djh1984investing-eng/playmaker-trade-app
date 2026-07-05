@@ -4473,6 +4473,17 @@ function Dash({ label, value }) {
 }
 
 function Procedure() {
+  const afterFillRules = [
+    "Once an order is filled, the main goal is to target 100 points, recent highs, or recent lows.",
+    "If the trade is filled but has not shown its hand yet, read the candles before adding risk.",
+    "Watch candle close color and whether candles are wicking out around the gator.",
+    "For a bearish idea, if 3-4 closed candles are green, price may come back against the setup. Derisk.",
+    "If holding 7 micros, take profit on half when the trade gives room.",
+    "Favor taking partial profits over moving the stop too early.",
+    "Do not aggressively move the stop until price has pushed through levels.",
+    "Always use the fib to see where price is likely to react next."
+  ];
+
   return (
     <div className="mt-7 grid gap-5">
       <Card>
@@ -4481,9 +4492,20 @@ function Procedure() {
             <div className="text-sm font-black uppercase tracking-[0.2em] text-[#ffcc19]">Playmaker Procedure</div>
             <Title>Procedure</Title>
             <p className="mt-2 max-w-3xl text-zinc-300">
-              Procedure details will be added here.
+              Follow these rules after a Playmaker order fills.
             </p>
           </div>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="text-2xl font-black text-[#ffcc19]">After Fill Management</h2>
+        <div className="mt-4 space-y-3">
+          {afterFillRules.map((rule) => (
+            <div key={rule} className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-sm text-zinc-200">
+              {rule}
+            </div>
+          ))}
         </div>
       </Card>
     </div>
