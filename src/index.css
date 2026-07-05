@@ -3,7 +3,7 @@
 .playmaker-ticker-track {
   display: inline-flex;
   min-width: max-content;
-  animation: playmaker-ticker-scroll 32s linear infinite;
+  animation: playmaker-ticker-scroll 56s linear infinite;
 }
 
 @keyframes playmaker-ticker-scroll {

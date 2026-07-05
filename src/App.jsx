@@ -4486,23 +4486,33 @@ function Tab({ id, tab, setTab, children }) {
 }
 
 function PlaymakerTicker() {
-  const message = [
+  const infoMessage = [
     "Welcome to Playmaker: automatic signals and manual setup grading in one workflow",
     "TradingView alerts feed Playmaker signals while you can still grade your own manual levels",
-    "Follow and like our social pages to receive 50% off your first month",
-    "New members get a 1-on-1 30 minute StreamYard tutorial with Mr. DJ Harrison",
     "Track high-of-day and low-of-day reactions before chasing the candle",
     "Review limit entries, stop plans, and confluence strength before execution",
     "Pulled orders stay parked when the idea is early but the level is still valid",
     "Local journal keeps your private notes; global journal shares member updates",
     "Trade with structure, protect risk, and let the setup prove itself"
   ].join("   |   ");
+  const promoMessage = [
+    "Follow and like all Playmaker social pages to receive 50% off your first month",
+    "New members get a 1-on-1 30 minute StreamYard tutorial with Mr. DJ Harrison"
+  ].join("   |   ");
 
   return (
-    <div className="mt-4 overflow-hidden rounded-2xl border-2 border-[#00d27a] bg-[#001a0f] py-4 text-base font-black uppercase tracking-[0.18em] text-[#00d27a] shadow-xl shadow-green-950/40">
-      <div className="playmaker-ticker-track whitespace-nowrap">
-        <span className="mx-8">{message}</span>
-        <span className="mx-8" aria-hidden="true">{message}</span>
+    <div className="mt-4 space-y-2">
+      <div className="overflow-hidden rounded-xl border border-[#2c2300] bg-black py-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#ffcc19]">
+        <div className="playmaker-ticker-track whitespace-nowrap">
+          <span className="mx-8">{infoMessage}</span>
+          <span className="mx-8" aria-hidden="true">{infoMessage}</span>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-2xl border-2 border-[#00d27a] bg-[#001a0f] py-4 text-base font-black uppercase tracking-[0.18em] text-[#00d27a] shadow-xl shadow-green-950/40">
+        <div className="playmaker-ticker-track whitespace-nowrap">
+          <span className="mx-8">{promoMessage}</span>
+          <span className="mx-8" aria-hidden="true">{promoMessage}</span>
+        </div>
       </div>
     </div>
   );
