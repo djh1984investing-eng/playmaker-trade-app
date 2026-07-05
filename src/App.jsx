@@ -2501,7 +2501,6 @@ const exportJournalCSV = () => {
 
     clearTradeForm();
     setTab("trade");
-    console.log("Order submitted to active anchors");
   };
 
   const saveTrade = async () => {
@@ -2521,7 +2520,6 @@ const exportJournalCSV = () => {
 
     clearTradeForm();
     setTab("journal");
-    console.log("Trade result saved and active anchor cleared");
   };
 
   const editTrade = (item) => {
