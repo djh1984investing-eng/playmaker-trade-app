@@ -3433,9 +3433,7 @@ const exportJournalCSV = () => {
 
   if (!user) {
   return (
-    <div className="min-h-screen bg-black text-white flex items-center justify-center p-6 pt-16 pb-16">
-      <PlaymakerTicker position="top" />
-      <PlaymakerTicker position="bottom" />
+    <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
       <div className="w-full max-w-md p-6 rounded-xl border border-yellow-500 bg-[#080808]">
 
         <h1 className="text-3xl font-bold text-[#ffcc19] mb-4">
@@ -3480,6 +3478,8 @@ const exportJournalCSV = () => {
           {authMessage}
         </p>
 
+        <PlaymakerTicker />
+
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
           <p className="mt-1">Purchase Playmaker, then register or log in with the same email.</p>
@@ -3517,13 +3517,12 @@ const exportJournalCSV = () => {
 
   if (accessStatus === "blocked") {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6 pt-16 pb-16">
-        <PlaymakerTicker position="top" />
-        <PlaymakerTicker position="bottom" />
+      <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-xl border border-[#ffcc19] bg-[#080808] p-6 text-center">
           <div className="text-3xl font-black text-[#ffcc19]">Playmaker Access Required</div>
           <p className="mt-3 text-zinc-300">{accessMessage}</p>
           <p className="mt-2 text-sm text-zinc-500">Use the same email you purchased with on Whop.</p>
+          <PlaymakerTicker />
           <a
             href={WHOP_CHECKOUT_URL}
             target="_blank"
@@ -4486,7 +4485,7 @@ function Tab({ id, tab, setTab, children }) {
   );
 }
 
-function PlaymakerTicker({ position = "top" }) {
+function PlaymakerTicker() {
   const message = [
     "Welcome to Playmaker",
     "Use price, direction, 4H bias, and 1H bias to fetch a grade",
@@ -4499,7 +4498,7 @@ function PlaymakerTicker({ position = "top" }) {
   ].join("   |   ");
 
   return (
-    <div className={`fixed left-0 right-0 z-40 overflow-hidden border-[#2c2300] bg-black/95 py-2 text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19] ${position === "bottom" ? "bottom-0 border-t" : "top-0 border-b"}`}>
+    <div className="mt-4 overflow-hidden rounded-xl border border-[#2c2300] bg-black py-2 text-[11px] font-black uppercase tracking-[0.16em] text-[#ffcc19]">
       <div className="playmaker-ticker-track whitespace-nowrap">
         <span className="mx-8">{message}</span>
         <span className="mx-8" aria-hidden="true">{message}</span>
