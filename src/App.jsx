@@ -492,6 +492,7 @@ useEffect(() => {
   const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
   const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
+  const [pulledAnchorKeys, setPulledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
   const previousAnchorMapRef = useRef(new Map());
@@ -745,6 +746,19 @@ useEffect(() => {
       localStorage.setItem("playmaker_filled_anchor_keys", JSON.stringify(filledAnchorKeys));
     } catch (_err) {}
   }, [filledAnchorKeys]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("playmaker_pulled_anchor_keys") || "{}");
+      if (saved && typeof saved === "object") setPulledAnchorKeys(saved);
+    } catch (_err) {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("playmaker_pulled_anchor_keys", JSON.stringify(pulledAnchorKeys));
+    } catch (_err) {}
+  }, [pulledAnchorKeys]);
 
   // Global verification/note sync from Supabase.
   // This keeps Mr. DJ Harrison verification badges and owner notes visible
@@ -2406,6 +2420,31 @@ const exportJournalCSV = () => {
     setTab("checklist");
   };
 
+  const deleteJournalEntry = async (item) => {
+    if (!item) return;
+    const ok = window.confirm("Delete this journal entry?");
+    if (!ok) return;
+
+    setJournal((prev) => prev.filter((row) => String(row.id) !== String(item.id)));
+
+    if (editingId && String(editingId) === String(item.id)) {
+      clearTradeForm();
+    }
+
+    if (user && item.id && !String(item.id).startsWith("reported-") && !String(item.id).startsWith("ai-") && !String(item.id).startsWith("zone-")) {
+      const { error } = await supabase
+        .from("trade_journal")
+        .delete()
+        .eq("id", item.id)
+        .eq("user_id", user.id);
+
+      if (error) {
+        console.error("Journal delete error:", error);
+        alert("Deleted from this screen, but Supabase delete failed.");
+      }
+    }
+  };
+
   const closestWeeklyLevelToEntry = (entryPrice) => {
     const entry = parsePrice(entryPrice);
     if (entry === null || weeklyLevels.length === 0) return null;
@@ -2616,6 +2655,33 @@ const exportJournalCSV = () => {
     return full || base || null;
   };
 
+  const pulledRecordForAnchor = (anchor) => {
+    const full = pulledAnchorKeys[anchorSubmitKey(anchor)];
+    const base = pulledAnchorKeys[`${anchorBaseKey(anchor)}|`];
+    return full || base || null;
+  };
+
+  const clearAnchorTransientState = (anchor) => {
+    if (!anchor) return;
+    const submitKey = anchorSubmitKey(anchor);
+    const baseKey = anchorBaseKey(anchor);
+    const priceOnlyKey = `${baseKey}|`;
+
+    setFilledAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[baseKey];
+      return next;
+    });
+
+    setPulledAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[submitKey];
+      delete next[priceOnlyKey];
+      delete next[baseKey];
+      return next;
+    });
+  };
+
   const saveBoardState = async (anchorKey, patch) => {
     if (!anchorKey) return false;
 
@@ -2663,6 +2729,14 @@ const exportJournalCSV = () => {
 
     setFilledAnchorKeys((prev) => {
       const next = { ...prev };
+      delete next[submittedBaseKey];
+      return next;
+    });
+
+    setPulledAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[submittedKey];
+      delete next[priceOnlyKey];
       delete next[submittedBaseKey];
       return next;
     });
@@ -2748,6 +2822,37 @@ const exportJournalCSV = () => {
 
   const dismissAnchorFromBoard = async (anchor) => {
     if (!anchor) return;
+    const pulledKey = anchorSubmitKey(anchor);
+    const pulledBaseKey = anchorBaseKey(anchor);
+    const priceOnlyKey = `${pulledBaseKey}|`;
+    const pulledRecord = {
+      pulledAt: new Date().toISOString(),
+      anchorSnapshot: {
+        ...anchor,
+        pulled: true,
+        pulledAt: new Date().toISOString()
+      },
+      ...anchorEvidenceSignature(anchor)
+    };
+
+    setPulledAnchorKeys((prev) => ({
+      ...prev,
+      [pulledKey]: pulledRecord,
+      [priceOnlyKey]: pulledRecord
+    }));
+
+    const pulledDetail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} - pulled from board - saved in Pulled Orders - ${formatEastern(new Date())}`;
+    setNotificationLog((prev) => [{
+      key: `PULLED-${pulledKey}-${Date.now()}`,
+      kind: "PULLED",
+      title: "Playmaker setup pulled",
+      detail: pulledDetail,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+    notifyPlaymaker("Playmaker setup pulled", pulledDetail, "play maker set up pulled");
+    sendDiscordBoardNotice({ event: "PULLED", title: "Playmaker Signal Pulled", detail: pulledDetail, anchor });
+    if (pulledKey) return;
+
     const hidden = markAnchorHiddenNow(anchor);
     const submittedKey = hidden?.submittedKey || anchorSubmitKey(anchor);
 
@@ -2780,8 +2885,25 @@ const exportJournalCSV = () => {
     sendDiscordBoardNotice({ event: "REMOVED", title: "Playmaker Signal Removed", detail, anchor });
   };
 
-  const submitAnchorToJournal = async (anchor) => {
+  const restorePulledAnchor = (anchor) => {
+    clearAnchorTransientState(anchor);
+    const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} - restored to board - ${formatEastern(new Date())}`;
+    setNotificationLog((prev) => [{
+      key: `RESTORED-${anchorSubmitKey(anchor)}-${Date.now()}`,
+      kind: "RESTORED",
+      title: "Playmaker setup restored",
+      detail,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+  };
+
+  const deletePulledAnchor = (anchor) => {
+    clearAnchorTransientState(anchor);
+  };
+
+  const submitAnchorToJournal = async (anchor, scope = "global") => {
     if (!anchor) return;
+    const isGlobalSubmit = scope === "global";
 
     // Hide it immediately before the database round trip so the same card cannot
     // rebuild on the board while Supabase is saving.
@@ -2846,7 +2968,9 @@ const exportJournalCSV = () => {
       createdAt: new Date().toISOString()
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup submitted", detail, "play maker setup submitted");
-    sendDiscordBoardNotice({ event: "SUBMITTED", title: "Playmaker Signal Submitted", detail, anchor: item });
+    if (isGlobalSubmit) {
+      sendDiscordBoardNotice({ event: "SUBMITTED", title: "Playmaker Signal Submitted", detail, anchor: item });
+    }
 
     setSelectedTrade(null);
     clearTradeForm();
@@ -2954,11 +3078,23 @@ const exportJournalCSV = () => {
 
   const boardUnfilledOrders = unfilledOrders
     .filter((order) => !submittedRecordForAnchor(order))
+    .filter((order) => !pulledRecordForAnchor(order))
     .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes));
 
   const filledPinnedAnchors = Object.values(filledAnchorKeys)
     .map((record) => record?.anchorSnapshot)
     .filter(Boolean)
+    .filter((anchor) => !submittedRecordForAnchor(anchor))
+    .filter((anchor) => !pulledRecordForAnchor(anchor));
+
+  const pulledAnchors = Object.values(pulledAnchorKeys)
+    .map((record) => record?.anchorSnapshot)
+    .filter(Boolean)
+    .reduce((acc, anchor) => {
+      const key = anchorSubmitKey(anchor);
+      if (!acc.some((item) => anchorSubmitKey(item) === key)) acc.push(anchor);
+      return acc;
+    }, [])
     .filter((anchor) => !submittedRecordForAnchor(anchor));
 
   const rawActiveAnchors = [
@@ -2971,6 +3107,7 @@ const exportJournalCSV = () => {
     })),
     ...rankedAiLimitZones
       .filter((zone) => !submittedZoneMatches(zone))
+      .filter((zone) => !pulledRecordForAnchor(zone))
       .filter((zone) => !filledPinnedAnchors.some((filled) => {
         const filledPrice = parsePrice(filled.entry || filled.price);
         const sameDirection = String(filled.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
@@ -3388,7 +3525,7 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {activeAnchors.length > 0 && (
+        {(activeAnchors.length > 0 || pulledAnchors.length > 0) && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -3401,6 +3538,7 @@ const exportJournalCSV = () => {
             <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            <LevelSection title="Pulled Orders" subtitle="Cards pulled off the main board. Restore them if the limit is still good, or journal/delete them later." items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
 
             {boardUnfilledOrders.length > 0 && (
               <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={boardUnfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
@@ -3706,6 +3844,7 @@ const exportJournalCSV = () => {
             journalStats={journalStats}
             saveTrade={saveTrade}
             editTrade={editTrade}
+            deleteJournalEntry={deleteJournalEntry}
             exportJournalCSV={exportJournalCSV}
             form={form}
             set={set}
@@ -3766,8 +3905,9 @@ function EvidenceList({ evidence = [] }) {
   );
 }
 
-function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor }) {
+function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor, onRestoreAnchor, onDeletePulledAnchor, mode = "active" }) {
   const isAi = anchor.sourceType === "AI Signal";
+  const isPulled = mode === "pulled" || anchor.pulled;
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
@@ -4038,6 +4178,38 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       )}
 
       <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
+        {isPulled && (
+          <>
+            <button
+              onClick={() => onRestoreAnchor?.(anchor)}
+              className="w-full rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black hover:bg-[#36ff9f]"
+            >
+              Restore To Board
+            </button>
+            <button
+              onClick={() => onDeletePulledAnchor?.(anchor)}
+              className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
+            >
+              Delete From Pulled Orders
+            </button>
+            <button
+              onClick={() => onSubmitAnchor?.(anchor, "local")}
+              className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
+            >
+              Save Local Journal
+            </button>
+            {ownerMode && (
+              <button
+                onClick={() => onSubmitAnchor?.(anchor, "global")}
+                className="w-full rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]"
+              >
+                Submit Global Journal
+              </button>
+            )}
+          </>
+        )}
+        {!isPulled && (
+          <>
         <button
           onClick={() => onMarkFilled?.(anchor)}
           className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
@@ -4051,17 +4223,27 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
           Screenshot Card — Social Post
         </button>
         <button
-          onClick={() => onSubmitAnchor?.(anchor)}
+          onClick={() => onSubmitAnchor?.(anchor, "local")}
           className="w-full rounded-lg bg-[#ffcc19] px-3 py-2 text-xs font-black text-black hover:bg-[#ffe16b]"
         >
-          Submit / Report to Journal
+          Save Local Journal
         </button>
+        {ownerMode && (
+          <button
+            onClick={() => onSubmitAnchor?.(anchor, "global")}
+            className="w-full rounded-lg border border-[#ffcc19] px-3 py-2 text-xs font-black text-[#ffcc19] hover:bg-[#171200]"
+          >
+            Submit Global Journal
+          </button>
+        )}
         <button
           onClick={() => onDismissAnchor?.(anchor)}
           className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
         >
-          Remove From Board
+          Pull From Board
         </button>
+          </>
+        )}
       </div>
 
       {isAi && <EvidenceList evidence={evidence} />}
@@ -4069,7 +4251,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   );
 }
 
-function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor }) {
+function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor, onRestoreAnchor, onDeletePulledAnchor, mode = "active" }) {
   if (!items.length) return null;
   return (
     <div className="mt-5">
@@ -4079,7 +4261,7 @@ function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ow
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         {items.map((anchor) => (
-          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} onDismissAnchor={onDismissAnchor} />
+          <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} onDismissAnchor={onDismissAnchor} onRestoreAnchor={onRestoreAnchor} onDeletePulledAnchor={onDeletePulledAnchor} mode={mode} />
         ))}
       </div>
     </div>
@@ -4271,7 +4453,7 @@ function Breakdown({ report, recommendations, tips }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-4"><Small label="Zone Score" value={`${report.zoneScore}/100`} /><Small label="Precision Grade Score" value={`${report.score}/100`} /><Small label="Top 3 Within 5" value={`${report.topWithin5}/3`} /><Small label="Far Levels 8+" value={report.farCount} /></div><div className="mt-4 rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-sm text-zinc-300">Raw points still count the reaction zone. The grade is capped by entry precision: top-weighted confluences need to align within 3–5 points for A/A+.</div><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
 }
 
-function Journal({ journal, journalStats, saveTrade, editTrade, exportJournalCSV, form, set, editingId, handleImageUpload }) {
+function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEntry, exportJournalCSV, form, set, editingId, handleImageUpload }) {
   const stats = journalStats || { total: 0, closed: 0, wins: 0, losses: 0, be: 0, unfilled: 0, winRate: 0, totalPL: 0, avgPL: 0, avgMove: 0, avgDrawdown: 0, avgDiscount: 0 };
 
   return (
@@ -4355,7 +4537,12 @@ function Journal({ journal, journalStats, saveTrade, editTrade, exportJournalCSV
                     <td>{j.discountPoints || "--"}</td>
                     <td>{j.top}</td>
                     <td>{j.profitLoss}</td>
-                    <td><button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button></td>
+                    <td>
+                      <div className="flex gap-3">
+                        <button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button>
+                        <button onClick={() => deleteJournalEntry?.(j)} className="text-red-400 font-bold">Delete</button>
+                      </div>
+                    </td>
                   </tr>
                   <tr>
                     <td colSpan="9" className="px-3 pb-5">
