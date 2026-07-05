@@ -885,8 +885,8 @@ useEffect(() => {
     },
     {
       item: "Entry source",
-      value: automationOn ? "Auto from TradingView alert" : (hasTradeEntry ? fmtPrice(parsePrice(form.tradeEntryPrice)) : "Manual entry needed"),
-      needed: automationOn ? "No manual entry needed. TradingView supplies the trade price when an alert fires." : "Manual mode needs an entry price typed before scoring.",
+      value: automationOn ? "Auto from Playmaker signal engine" : (hasTradeEntry ? fmtPrice(parsePrice(form.tradeEntryPrice)) : "Manual entry needed"),
+      needed: automationOn ? "No manual entry needed. Playmaker supplies the trade price when a signal fires." : "Manual mode needs an entry price typed before scoring.",
       ready: automationOn || hasTradeEntry,
       status: automationOn ? "Auto" : (hasTradeEntry ? "Ready" : "Needed")
     },
@@ -920,7 +920,7 @@ useEffect(() => {
     setAiLoading(true);
     setAiFetchMessage("");
 
-    // Pull both TradingView webhook rows and older DJH rows.
+    // Pull both automated signal rows and older DJH rows.
     // The scanner must use delivered indicator levels, not only manual weekly/crater inputs.
     const { data, error } = await supabase
       .from("playmaker_signals")
@@ -934,7 +934,7 @@ useEffect(() => {
       setAiFetchMessage("AI fetch failed. Check Supabase table/settings.");
     } else {
       setAiSignals(data || []);
-      setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} TradingView/AI signals.` : "No AI signals found yet.");
+      setAiFetchMessage((data || []).length ? `Fetched ${(data || []).length} Playmaker signal rows.` : "No AI signals found yet.");
     }
     setAiLoading(false);
   };
@@ -1189,7 +1189,7 @@ useEffect(() => {
 
   const unfilledAiSignals = aiSignals.filter((signal) => !signalHasJournal(signal));
 
-  // Scanner input should include all fetched TradingView level rows.
+  // Scanner input should include all fetched automated level rows.
   // Journal filtering is only for hiding already-submitted order cards, not for excluding confluence levels.
   const scannerAiSignals = aiSignals.filter((signal) => !isGenericPriceAlertSignal(signal));
 
@@ -3754,7 +3754,7 @@ const exportJournalCSV = () => {
                       </div>
                     ))}
                     {manualScannerResult.evidence.length === 0 && (
-                      <div className="text-sm text-zinc-500">No saved TradingView confluence, weekly level, or crater box was found within 15 points.</div>
+                      <div className="text-sm text-zinc-500">No saved Playmaker confluence, weekly level, or crater box was found within 15 points.</div>
                     )}
                   </div>
                 </div>
@@ -3865,7 +3865,7 @@ const exportJournalCSV = () => {
 
             <Card>
               <Title>AI Pillar Zones</Title>
-              <p className="mt-2 text-zinc-400">Save multiple weekly levels and crater boxes. These are the foundation zones the AI uses with TradingView alerts.</p>
+              <p className="mt-2 text-zinc-400">Save multiple weekly levels and crater boxes. These are the foundation zones the Playmaker signal engine uses.</p>
 
               {aiLevelMessage && <div className="mt-4 rounded-xl border border-[#2c2300] bg-[#090909] p-3 text-sm text-[#ffcc19]">{aiLevelMessage}</div>}
 
@@ -4487,7 +4487,7 @@ function Tab({ id, tab, setTab, children }) {
 
 const playmakerInfoMessage = [
   "Welcome to Playmaker: automatic signals and manual setup grading in one workflow",
-  "TradingView alerts feed Playmaker signals while you can still grade your own manual levels",
+  "Playmaker automatic signals work alongside your manual setup grading",
   "Track high-of-day and low-of-day reactions before chasing the candle",
   "Review limit entries, stop plans, and confluence strength before execution",
   "Pulled orders stay parked when the idea is early but the level is still valid",
