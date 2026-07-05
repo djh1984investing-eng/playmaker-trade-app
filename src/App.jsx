@@ -4487,14 +4487,13 @@ function Tab({ id, tab, setTab, children }) {
 
 function PlaymakerTicker() {
   const message = [
-    "Welcome to Playmaker",
-    "Use price, direction, 4H bias, and 1H bias to fetch a grade",
-    "Track high of day and low of day reactions",
-    "Review stop plans before using a limit",
-    "Pulled orders stay saved when the limit is still good",
-    "Local journal is private",
-    "Global journal sends member notice",
-    "Trading involves risk"
+    "Welcome to Playmaker: built for traders who plan the level before the move",
+    "Scan price, direction, 4H bias, and 1H bias for a cleaner setup grade",
+    "Track high-of-day and low-of-day reactions before chasing the candle",
+    "Review limit entries, stop plans, and confluence strength before execution",
+    "Pulled orders stay parked when the idea is early but the level is still valid",
+    "Local journal keeps your private notes; global journal shares member updates",
+    "Trade with structure, protect risk, and let the setup prove itself"
   ].join("   |   ");
 
   return (
