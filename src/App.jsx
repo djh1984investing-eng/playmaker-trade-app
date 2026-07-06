@@ -2845,11 +2845,18 @@ const exportJournalCSV = () => {
   const saveBoardState = async (anchorKey, patch) => {
     if (!anchorKey) return false;
 
+    const allowedPatch = {};
+    ["status", "verified", "owner_note", "removed", "submitted"].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        allowedPatch[key] = patch[key];
+      }
+    });
+
     const payload = {
       anchor_key: anchorKey,
       updated_by: user?.id || null,
       updated_at: new Date().toISOString(),
-      ...patch
+      ...allowedPatch
     };
 
     try {
