@@ -928,7 +928,6 @@ useEffect(() => {
     const { data, error } = await supabase
       .from("ai_levels")
       .select("*")
-      .eq("user_id", user.id)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -3238,10 +3237,12 @@ const exportJournalCSV = () => {
   const selectedLvnEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("LVN"));
   const selectedEntryIsCrown = ["A+", "A"].includes(selectedTrade?.grade);
 
-  const boardUnfilledOrders = unfilledOrders
-    .filter((order) => !submittedRecordForAnchor(order))
-    .filter((order) => !pulledRecordForAnchor(order))
-    .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes));
+  const boardUnfilledOrders = ownerMode
+    ? unfilledOrders
+      .filter((order) => !submittedRecordForAnchor(order))
+      .filter((order) => !pulledRecordForAnchor(order))
+      .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes))
+    : [];
 
   const filledPinnedAnchors = Object.values(filledAnchorKeys)
     .map((record) => record?.anchorSnapshot)
