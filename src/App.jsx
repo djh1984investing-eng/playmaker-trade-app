@@ -3190,8 +3190,7 @@ const exportJournalCSV = () => {
       verified: true,
       owner_note: verification.ownerNote,
       removed: false,
-      submitted: false,
-      anchor_snapshot: anchor
+      submitted: false
     })));
 
     const detail = `${direction} ${fmtPrice(anchor.entry || anchor.price)} - verified by Mr. DJ Harrison${verification.ownerNote ? ` - ${verification.ownerNote}` : ""} - ${formatEastern(new Date())}`;
@@ -3215,8 +3214,7 @@ const exportJournalCSV = () => {
 
     await Promise.all(keys.map((key) => saveBoardState(key, {
       verified: false,
-      owner_note: null,
-      anchor_snapshot: anchor
+      owner_note: null
     })));
 
     const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} - verification removed - ${formatEastern(new Date())}`;
