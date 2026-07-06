@@ -867,8 +867,23 @@ useEffect(() => {
   const canStart = (key) => startingOptions.includes(key);
   const startDisabled = (key) => startingLevel && startingLevel !== key;
 
-  const weeklyLevels = aiLevels.filter((level) => level.level_type === "weekly");
-  const craterBoxes = aiLevels.filter((level) => level.level_type === "crater");
+  const aiLevelCreatedTime = (level) => new Date(level?.created_at || level?.updated_at || 0).getTime() || 0;
+  const weeklySortPrice = (level) => {
+    const price = parsePrice(level?.price);
+    return price === null ? Number.POSITIVE_INFINITY : price;
+  };
+  const craterSortPrice = (box) => {
+    const top = parsePrice(box?.top_price);
+    const bottom = parsePrice(box?.bottom_price);
+    return top === null || bottom === null ? Number.POSITIVE_INFINITY : (Math.max(top, bottom) + Math.min(top, bottom)) / 2;
+  };
+
+  const weeklyLevels = aiLevels
+    .filter((level) => level.level_type === "weekly")
+    .sort((a, b) => weeklySortPrice(a) - weeklySortPrice(b) || aiLevelCreatedTime(a) - aiLevelCreatedTime(b));
+  const craterBoxes = aiLevels
+    .filter((level) => level.level_type === "crater")
+    .sort((a, b) => craterSortPrice(a) - craterSortPrice(b) || aiLevelCreatedTime(a) - aiLevelCreatedTime(b));
 
   const currentCraterTop = parsePrice(aiSettings.volumeCraterTop);
   const currentCraterBottom = parsePrice(aiSettings.volumeCraterBottom);
