@@ -5,6 +5,7 @@ import { trackBuyAccessClick } from "./lib/googleTracking";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 const maxConfluenceDistancePoints = 15;
+const maxOrderCardDistancePoints = 2000;
 const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
 const TICK_SIZE = 0.25;
 const roundToTick = (price) => {
@@ -1825,8 +1826,7 @@ useEffect(() => {
       if (!hasDirectionalEngine && hasPrecisionEngine) gatedScore = Math.min(gatedScore, 84);
       const score = Math.round(clamp(gatedScore, 0, 100));
       const [zoneGrade] = grade(score);
-      const triggerDistances = zone.evidence.map((item) => item.triggerPrice !== null ? Math.abs(item.triggerPrice - zone.price) : null).filter((value) => value !== null);
-      const nearestTriggerDistance = triggerDistances.length ? Math.min(...triggerDistances) : null;
+      const triggerPrices = zone.evidence.map((item) => item.triggerPrice).filter(Number.isFinite);
       const clusterPrices = uniqueSortedPrices(zone.evidence);
       const clusterLow = clusterPrices.length ? clusterPrices[0] : zone.price;
       const clusterHigh = clusterPrices.length ? clusterPrices[clusterPrices.length - 1] : zone.price;
@@ -1834,6 +1834,8 @@ useEffect(() => {
       const zoneCenter = (clusterHigh + clusterLow) / 2;
       const entryStack = findBestEntryStack(zone.evidence, zoneCenter);
       const clusterCenter = roundToTick(entryStack.center);
+      const triggerDistances = triggerPrices.map((price) => Math.abs(price - clusterCenter));
+      const nearestTriggerDistance = triggerDistances.length ? Math.min(...triggerDistances) : null;
       const tight5Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 2.5).length;
       const tight10Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 5).length;
       const tight20Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 10).length;
@@ -1866,7 +1868,12 @@ useEffect(() => {
       const createdAt = createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : zone.created_at;
       const updatedAt = createdTimes.length ? new Date(Math.max(...createdTimes)).toISOString() : zone.created_at;
       return { ...zone, precisionOnly, hasOnlyManualPillars, id: `level-${Math.round(clusterCenter)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} cluster ${fmtPrice(clusterCenter)}`, sourceType: "Persistent Level Stack", price: clusterCenter, clusterCenter, clusterLow, clusterHigh, clusterWidth, clusterPrices, tight5Count, tight10Count, tight20Count, stopPlans, score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, evidence: sortedEvidence, sourceCount, created_at: createdAt, updated_at: updatedAt, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked cluster ${fmtPrice(clusterCenter)}`, payload: { price: clusterCenter, cluster_center: clusterCenter, zone_center: zoneCenter, entry_stack_center: clusterCenter, entry_stack_low: entryStack.low, entry_stack_high: entryStack.high, entry_stack_width: entryStack.width, entry_stack_count: entryStack.count, entry_stack_labels: entryStack.labels, cluster_low: clusterLow, cluster_high: clusterHigh, cluster_width: clusterWidth, stop_plans: stopPlans, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: sortedEvidence.map((item) => ({ label: item.label, price: item.price, sourceType: item.sourceType, score: item.evidenceScore, created_at: item.created_at })) } };
-    }).filter((zone) => zone.score >= 55 && !zone.precisionOnly && !zone.hasOnlyManualPillars).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
+    }).filter((zone) => (
+      zone.score >= 55 &&
+      !zone.precisionOnly &&
+      !zone.hasOnlyManualPillars &&
+      (zone.triggerDistance === null || zone.triggerDistance <= maxOrderCardDistancePoints)
+    )).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
 
     const selected = [];
     const directionCounts = { Long: 0, Short: 0, Both: 0 };
