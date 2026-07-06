@@ -257,6 +257,12 @@ const isOpenOrder = (item) => {
   return result === "unfilled" || result === "edge" || orderStatus === "unfilled" || item?.pendingOrder === true;
 };
 
+const isManualOrder = (item) => {
+  const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
+  const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
+  return sourceType.includes("manual") || signalName.includes("manual");
+};
+
 const sameTradeAnchor = (a, b) => {
   if (!a || !b) return false;
 
@@ -566,9 +572,7 @@ useEffect(() => {
   };
 
   const isManualAnchor = (anchor = null) => {
-    const sourceType = String(anchor?.sourceType || anchor?.source_type || anchor?.rawSignal?.sourceType || anchor?.payload?.sourceType || "").toLowerCase();
-    const signalName = String(anchor?.signalName || anchor?.rawSignal?.signal || anchor?.payload?.signal || "").toLowerCase();
-    return sourceType.includes("manual") || signalName.includes("manual");
+    return isManualOrder(anchor);
   };
 
   const sendDiscordBoardNotice = async ({ event, title = "Playmaker Signal", detail = "", anchor = null }) => {
@@ -3243,6 +3247,7 @@ const exportJournalCSV = () => {
   const displayScore = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? selectedAiScore : report.score;
   const displayPrecision = selectedTrade?.sourceType === "AI Signal" && selectedAiPrecision ? selectedAiPrecision : report.score;
   const unfilledOrders = journal.filter((j) => isOpenOrder(j));
+  const signalUnfilledOrders = unfilledOrders.filter((order) => !isManualOrder(order));
   const selectedEntryEvidence = selectedTrade?.evidence || selectedTrade?.rawSignal?.evidence || [];
   const selectedVpEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").startsWith("Volume Profile"));
   const selectedPocEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("POC"));
@@ -3250,21 +3255,22 @@ const exportJournalCSV = () => {
   const selectedEntryIsCrown = ["A+", "A"].includes(selectedTrade?.grade);
 
   const boardUnfilledOrders = ownerMode
-    ? unfilledOrders
+    ? signalUnfilledOrders
       .filter((order) => !submittedRecordForAnchor(order))
       .filter((order) => !pulledRecordForAnchor(order))
-      .filter((order) => !(String(order.sourceType || "Manual Order") === "Manual Order" && String(order.entry || "") === "21450" && !order.notes))
     : [];
 
   const filledPinnedAnchors = Object.values(filledAnchorKeys)
     .map((record) => record?.anchorSnapshot)
     .filter(Boolean)
+    .filter((anchor) => !isManualOrder(anchor))
     .filter((anchor) => !submittedRecordForAnchor(anchor))
     .filter((anchor) => !pulledRecordForAnchor(anchor));
 
   const pulledAnchors = Object.values(pulledAnchorKeys)
     .map((record) => record?.anchorSnapshot)
     .filter(Boolean)
+    .filter((anchor) => !isManualOrder(anchor))
     .reduce((acc, anchor) => {
       const key = anchorSubmitKey(anchor);
       if (!acc.some((item) => anchorSubmitKey(item) === key)) acc.push(anchor);
@@ -3288,7 +3294,7 @@ const exportJournalCSV = () => {
         const sameDirection = String(filled.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
         return filledPrice !== null && sameDirection && Math.abs(filledPrice - zone.price) <= Math.max(2, Math.min(levelMergeTolerance, zone.clusterWidth || levelMergeTolerance));
       }))
-      .filter((zone) => !unfilledOrders.some((order) => {
+      .filter((zone) => !signalUnfilledOrders.some((order) => {
         const orderEntry = parsePrice(order.entry || order.entry_price);
         const sameDirection = String(order.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
         const entryMatches = orderEntry !== null && Math.abs(orderEntry - zone.price) <= Math.max(2, Math.min(levelMergeTolerance, zone.clusterWidth || levelMergeTolerance));
@@ -3721,10 +3727,6 @@ const exportJournalCSV = () => {
             <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Pulled Orders" subtitle="Cards pulled off the main board. Restore them if the limit is still good, or journal/delete them later." items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
-
-            {boardUnfilledOrders.length > 0 && (
-              <LevelSection title="Manual Orders" subtitle="Your active manual orders." items={boardUnfilledOrders.map((order) => ({ ...order, sourceType: order.sourceType || "Manual Order" }))} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
-            )}
           </div>
         )}
 
