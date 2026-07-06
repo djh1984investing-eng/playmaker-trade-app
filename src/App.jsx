@@ -565,8 +565,15 @@ useEffect(() => {
     } catch (_err) {}
   };
 
+  const isManualAnchor = (anchor = null) => {
+    const sourceType = String(anchor?.sourceType || anchor?.source_type || anchor?.rawSignal?.sourceType || anchor?.payload?.sourceType || "").toLowerCase();
+    const signalName = String(anchor?.signalName || anchor?.rawSignal?.signal || anchor?.payload?.signal || "").toLowerCase();
+    return sourceType.includes("manual") || signalName.includes("manual");
+  };
+
   const sendDiscordBoardNotice = async ({ event, title = "Playmaker Signal", detail = "", anchor = null }) => {
     if (!ownerMode || !user) return;
+    if (!anchor || isManualAnchor(anchor)) return;
 
     try {
       const { data } = await supabase.auth.getSession();
