@@ -2846,7 +2846,7 @@ const exportJournalCSV = () => {
     if (!anchorKey) return false;
 
     const allowedPatch = {};
-    ["status", "verified", "owner_note", "removed", "submitted"].forEach((key) => {
+    ["verified", "owner_note"].forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(patch, key)) {
         allowedPatch[key] = patch[key];
       }
