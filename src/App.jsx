@@ -2821,15 +2821,11 @@ const exportJournalCSV = () => {
   };
 
   const submittedRecordForAnchor = (anchor) => {
-    const full = submittedAnchorKeys[anchorSubmitKey(anchor)];
-    const base = submittedAnchorKeys[`${anchorBaseKey(anchor)}|`];
-    return full || base || null;
+    return submittedAnchorKeys[anchorSubmitKey(anchor)] || null;
   };
 
   const pulledRecordForAnchor = (anchor) => {
-    const full = pulledAnchorKeys[anchorSubmitKey(anchor)];
-    const base = pulledAnchorKeys[`${anchorBaseKey(anchor)}|`];
-    return full || base || null;
+    return pulledAnchorKeys[anchorSubmitKey(anchor)] || null;
   };
 
   const clearAnchorTransientState = (anchor) => {
@@ -2940,17 +2936,10 @@ const exportJournalCSV = () => {
     if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
     if (!ownerMode) return false;
 
-    const zonePrice = parsePrice(zone?.price || zone?.entry);
-    const zoneDirection = String(zone?.direction || "BOTH").toUpperCase();
     return journal.some((j) => {
       if (isOpenOrder(j)) return false;
-      const journalPrice = parsePrice(j.entry || j.entry_price);
-      const journalDirection = String(j.direction || "BOTH").toUpperCase();
-      const samePrice = zonePrice !== null && journalPrice !== null && Math.abs(journalPrice - zonePrice) <= Math.max(2, Math.min(levelMergeTolerance, Number(zone?.clusterWidth || levelMergeTolerance)));
-      const sameDirection = journalDirection === zoneDirection || zoneDirection === "BOTH" || journalDirection === "BOTH";
       const journalSignalId = String(j.signal_id || j.ai_signal_id || "");
-      const signalMatches = journalSignalId && String(zone?.sourceId || "").includes(journalSignalId);
-      return sameDirection && (samePrice || signalMatches);
+      return journalSignalId && String(zone?.sourceId || "").includes(journalSignalId);
     });
   };
 
