@@ -1952,7 +1952,7 @@ useEffect(() => {
     const biasAligned = [bias4H, bias1H].filter((bias) => bias === directionBiasWord).length;
     const mixedBias = bias4H !== bias1H;
 
-    const evidence = [
+    const allEvidence = [
       ...scannerAiSignals.flatMap(buildLevelEvidenceCandidates),
       ...weeklyLevels.map((level) => ({
         price: Number(level.price),
@@ -1982,13 +1982,30 @@ useEffect(() => {
     ]
       .map((item) => ({ ...item, parsedPrice: parsePrice(item.price) }))
       .filter((item) => item.parsedPrice !== null)
-      .map((item) => ({ ...item, distance: Math.abs(item.parsedPrice - price) }))
-      .filter((item) => item.distance <= maxConfluenceDistancePoints)
       .filter((item) => {
         const itemDirection = String(item.direction || "Both").toLowerCase();
         return itemDirection === "both" || itemDirection.includes(desiredDirection);
-      })
+      });
+
+    const nearbyEntryWindow = allEvidence
+      .map((item) => ({ ...item, fetchDistance: Math.abs(item.parsedPrice - price) }))
+      .filter((item) => item.fetchDistance <= 20);
+
+    const entryStack = nearbyEntryWindow.length
+      ? findBestEntryStack(nearbyEntryWindow.map((item) => ({ ...item, price: item.parsedPrice })), price)
+      : { center: price, low: price, high: price, width: 0, count: 0, labels: [] };
+    const suggestedEntryRaw = roundToTick(entryStack.center);
+    const suggestedEntry = clamp(Number(suggestedEntryRaw), price - 20, price + 20);
+
+    const evidence = allEvidence
+      .map((item) => ({
+        ...item,
+        distance: Math.abs(item.parsedPrice - suggestedEntry),
+        fetchDistance: Math.abs(item.parsedPrice - price)
+      }))
+      .filter((item) => item.distance <= maxConfluenceDistancePoints)
       .sort((a, b) => a.distance - b.distance || Number(b.evidenceScore || 0) - Number(a.evidenceScore || 0));
+    const entryEvidence = evidence.filter((item) => Math.abs(item.parsedPrice - suggestedEntry) <= 6).slice(0, 6);
 
     const nearest = (test) => evidence.find(test);
     const nearestWeekly = nearest((item) => item.sourceType === "Weekly Level");
@@ -2010,7 +2027,7 @@ useEffect(() => {
     setEditingId(null);
     setForm((prev) => ({
       ...prev,
-      tradeEntryPrice: String(price),
+      tradeEntryPrice: String(suggestedEntry),
       direction,
       bias4H,
       bias1H,
@@ -2050,22 +2067,28 @@ useEffect(() => {
       ltfVolNodeAway: nearestVp ? String(fmt(nearestVp.distance)) : prev.ltfVolNodeAway,
       liquidityOn: nearestPoc ? "Yes" : "No",
       notes: [
-        `Manual scan ${direction} at ${fmtPrice(price)}.`,
+        `Manual scan ${direction} fetched at ${fmtPrice(price)}.`,
+        `Suggested entry ${fmtPrice(suggestedEntry)} from strongest confluence stack inside 20 points.`,
         `4H ${bias4H}, 1H ${bias1H}${mixedBias ? " (mixed bias)" : ""}.`,
-        evidence.length ? `Found ${evidence.length} nearby source(s).` : "No stored confluences found within 15 points."
+        evidence.length ? `Found ${evidence.length} source(s) near suggested entry.` : "No stored confluences found within 15 points of suggested entry."
       ].join(" ")
     }));
 
     setManualScannerResult({
       price,
+      fetchedPrice: price,
+      suggestedEntry,
+      suggestedDistance: Math.abs(suggestedEntry - price),
+      entryStack,
+      entryEvidence,
       direction,
       bias4H,
       bias1H,
       evidence,
       biasAligned,
       message: evidence.length
-        ? `Found ${evidence.length} source(s) within ${maxConfluenceDistancePoints} points.`
-        : "No stored confluence found near that price yet."
+        ? `Suggested ${fmtPrice(suggestedEntry)} from ${entryEvidence.length || evidence.length} source(s) inside the 20-point fetch window.`
+        : `No stored confluence found near that range yet. Using fetched price ${fmtPrice(price)}.`
     });
     setTab("checklist");
   };
@@ -3830,12 +3853,18 @@ const exportJournalCSV = () => {
                     <div>
                       <div className="font-black text-[#ffcc19]">{manualScannerResult.message}</div>
                       <div className="mt-1 text-sm text-zinc-400">
-                        {manualScannerResult.direction} {fmtPrice(manualScannerResult.price)} - 4H {manualScannerResult.bias4H} - 1H {manualScannerResult.bias1H}
+                        {manualScannerResult.direction} fetched {fmtPrice(manualScannerResult.fetchedPrice || manualScannerResult.price)} - 4H {manualScannerResult.bias4H} - 1H {manualScannerResult.bias1H}
                       </div>
                     </div>
                     <div className={`rounded-full px-3 py-2 text-xs font-black ${manualScannerResult.biasAligned === 2 ? "bg-[#00d27a] text-black" : manualScannerResult.biasAligned === 1 ? "bg-[#ffcc19] text-black" : "bg-red-950 text-red-300"}`}>
                       {manualScannerResult.biasAligned === 2 ? "BIAS ALIGNED" : manualScannerResult.biasAligned === 1 ? "MIXED BIAS" : "AGAINST BIAS"}
                     </div>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-4">
+                    <Small label="Suggested Entry" value={fmtPrice(manualScannerResult.suggestedEntry || manualScannerResult.price)} />
+                    <Small label="Away From Fetch" value={`${fmt(manualScannerResult.suggestedDistance || 0)} pts`} />
+                    <Small label="Grade" value={grade(report.score)[0]} />
+                    <Small label="Score" value={`${report.score}/100`} />
                   </div>
                   <div className="mt-4 grid gap-2 md:grid-cols-3">
                     {manualScannerResult.evidence.slice(0, 9).map((item, idx) => (
