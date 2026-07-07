@@ -272,7 +272,9 @@ const isOpenOrder = (item) => {
 const isManualOrder = (item) => {
   const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
   const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
-  return sourceType.includes("manual") || signalName.includes("manual");
+  const eventText = String(item?.event || item?.title || item?.detail || item?.notes || "").toLowerCase();
+  const isAiSignal = sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
+  return !isAiSignal && (sourceType.includes("manual") || signalName.includes("manual") || eventText.includes("manual order") || eventText.includes("manual scan"));
 };
 
 const sameTradeAnchor = (a, b) => {
@@ -3025,6 +3027,31 @@ const exportJournalCSV = () => {
 
   const dismissAnchorFromBoard = async (anchor) => {
     if (!anchor) return;
+    if (isManualOrder(anchor)) {
+      setJournal((prev) => prev.filter((item) => String(item.id) !== String(anchor.id)));
+      if (user && anchor.id && !String(anchor.id).startsWith("reported-") && !String(anchor.id).startsWith("ai-") && !String(anchor.id).startsWith("zone-")) {
+        try {
+          await supabase
+            .from("trade_journal")
+            .update({ result: "Cancelled" })
+            .eq("id", anchor.id)
+            .eq("user_id", user.id);
+        } catch (err) {
+          console.error("Manual order remove error:", err);
+        }
+      }
+
+      const detail = `${String(anchor.direction || "BOTH").toUpperCase()} ${fmtPrice(anchor.entry || anchor.price)} - manual order removed locally - ${formatEastern(new Date())}`;
+      setNotificationLog((prev) => [{
+        key: `MANUAL-REMOVED-${anchorSubmitKey(anchor)}-${Date.now()}`,
+        kind: "MANUAL_REMOVED",
+        title: "Manual order removed",
+        detail,
+        createdAt: new Date().toISOString()
+      }, ...prev].slice(0, 50));
+      return;
+    }
+
     const pulledKey = anchorSubmitKey(anchor);
     const pulledBaseKey = anchorBaseKey(anchor);
     const priceOnlyKey = `${pulledBaseKey}|`;
@@ -3054,7 +3081,7 @@ const exportJournalCSV = () => {
     }, ...prev].slice(0, 50));
     notifyPlaymaker("Playmaker setup pulled", pulledDetail, "play maker set up pulled");
     sendDiscordBoardNotice({ event: "PULLED", title: "Playmaker Signal Pulled", detail: pulledDetail, anchor });
-    if (pulledKey) return;
+    return;
 
     const hidden = markAnchorHiddenNow(anchor);
     const submittedKey = hidden?.submittedKey || anchorSubmitKey(anchor);

@@ -13,8 +13,17 @@ const isOwnerUser = (user) => {
   return OWNER_EMAILS.some((owner) => text.includes(String(owner).toLowerCase()));
 };
 
+const isManualAnchor = ({ event = "", title = "", detail = "", anchor = {} } = {}) => {
+  const sourceType = String(anchor.sourceType || anchor.source_type || anchor.rawSignal?.sourceType || anchor.payload?.sourceType || "").toLowerCase();
+  const signalName = String(anchor.signalName || anchor.rawSignal?.signal || anchor.payload?.signal || "").toLowerCase();
+  const text = `${event} ${title} ${detail}`.toLowerCase();
+  const isAiSignal = sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
+  return !isAiSignal && (sourceType.includes("manual") || signalName.includes("manual") || text.includes("manual order") || text.includes("manual scan"));
+};
+
 const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", detail = "", anchor = {} }) => {
   if (!discordWebhookUrl) return { skipped: true };
+  if (isManualAnchor({ event, title, detail, anchor })) return { skipped: true, reason: "Manual order notices are local only" };
 
   const direction = String(anchor.direction || anchor.rawSignal?.direction || "").toUpperCase();
   const entry = anchor.entry || anchor.price || anchor.rawSignal?.entry || anchor.rawSignal?.price || "";
