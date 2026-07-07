@@ -1913,7 +1913,7 @@ useEffect(() => {
         selected.push(zone);
         directionCounts[dir] += 1;
       }
-      if (selected.length >= 10) break;
+      if (selected.length >= 12) break;
     }
     return selected;
   }, [scannerAiSignals, weeklyLevels, craterBoxes]);
