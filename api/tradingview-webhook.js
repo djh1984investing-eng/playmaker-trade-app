@@ -22,6 +22,39 @@ const safeText = (value, fallback = "", maxLength = 120) => {
   return text.slice(0, maxLength);
 };
 
+const parseNumber = (value) => {
+  const parsed = Number(String(value ?? "").replace(/,/g, "").trim());
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+
+const removeMissingColumn = (row, message = "") => {
+  const match = String(message).match(/'([^']+)' column|column "([^"]+)"/i);
+  const column = match?.[1] || match?.[2];
+  if (!column || !(column in row)) return false;
+  delete row[column];
+  return true;
+};
+
+const insertSignalRow = async (row) => {
+  let nextRow = { ...row };
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const { data, error } = await supabase
+      .from("playmaker_signals")
+      .insert([nextRow])
+      .select();
+
+    if (!error) return { data, error: null, savedColumns: Object.keys(nextRow) };
+
+    const missingColumn = /column/i.test(error.message || "") && removeMissingColumn(nextRow, error.message);
+    if (!missingColumn) return { data: null, error };
+  }
+
+  return { data: null, error: new Error("Could not save signal after removing unsupported columns") };
+};
+
 export default async function handler(req, res) {
   res.setHeader("Cache-Control", "no-store");
 
@@ -43,25 +76,30 @@ export default async function handler(req, res) {
 
   try {
     const signal = req.body || {};
+    const triggerPrice = parseNumber(firstDefined(signal.trigger_price, signal.current_price, signal.close, signal.last, signal.alert_price));
+    const entryPrice = parseNumber(firstDefined(signal.entry, signal.entry_price, signal.limit_price, signal.price));
+    const displayPrice = parseNumber(firstDefined(signal.price, signal.entry, signal.entry_price, signal.trigger_price, signal.current_price, signal.close, signal.last));
+    const row = {
+      user_id: "tradingview",
+      symbol: safeText(signal.symbol || signal.ticker, "MNQ", 24).toUpperCase(),
+      timeframe: safeText(signal.timeframe || signal.interval || signal.tf, "", 24),
+      signal: safeText(signal.signal || signal.setup || signal.alert_name, "Playmaker Signal", 180),
+      direction: safeText(signal.direction || signal.side || signal.action, "", 24).toUpperCase(),
+      price: displayPrice,
+      entry_price: entryPrice,
+      trigger_price: triggerPrice,
+      raw: signal,
+      raw_json: signal,
+      payload: signal
+    };
 
-    const { data, error } = await supabase
-      .from("playmaker_signals")
-      .insert([
-        {
-          user_id: "tradingview",
-          symbol: safeText(signal.symbol, "MNQ", 24).toUpperCase(),
-          timeframe: safeText(signal.timeframe || signal.interval, "", 24),
-          signal: safeText(signal.signal || signal.setup, "TradingView Signal", 180),
-          direction: safeText(signal.direction, "", 24).toUpperCase(),
-        }
-      ])
-      .select();
+    const { data, error, savedColumns } = await insertSignalRow(row);
 
     if (error) {
       return res.status(500).json({ ok: false, error: error.message });
     }
 
-    return res.status(200).json({ ok: true, data });
+    return res.status(200).json({ ok: true, data, savedColumns });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }

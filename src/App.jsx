@@ -169,6 +169,17 @@ const arrayFromMaybe = (value) => {
 
 const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
 
+const objectFromMaybeJson = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_err) {
+    return {};
+  }
+};
+
 const levelKeyFromName = (name) => {
   const text = String(name ?? "").trim();
   if (!text) return "";
@@ -201,7 +212,7 @@ const getNestedLevelValue = (payload, label) => {
 
 
 const isGenericPriceAlertSignal = (signal) => {
-  const payload = { ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}), ...signal };
+  const payload = { ...objectFromMaybeJson(signal?.payload), ...objectFromMaybeJson(signal?.raw_json), ...objectFromMaybeJson(signal?.raw), ...signal };
   const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal?.signal, "") || "").toUpperCase();
   const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
   return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
@@ -1244,7 +1255,9 @@ useEffect(() => {
 
 
   const getSignalPayload = (signal) => ({
-    ...(signal?.raw && typeof signal.raw === "object" ? signal.raw : {}),
+    ...objectFromMaybeJson(signal?.payload),
+    ...objectFromMaybeJson(signal?.raw_json),
+    ...objectFromMaybeJson(signal?.raw),
     ...signal
   });
 
