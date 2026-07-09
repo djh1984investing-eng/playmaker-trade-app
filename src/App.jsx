@@ -459,6 +459,7 @@ useEffect(() => {
     saveStoredNoticeKeys(seenNotificationKeys);
   }, [seenNotificationKeys]);
 
+
   const requestDesktopNotifications = async () => {
     if (typeof window === "undefined") return;
     try {
@@ -817,6 +818,7 @@ useEffect(() => {
   const away = (key) => (startingLevel === key ? 0 : n(form[`${key}Away`]));
   const canStart = (key) => startingOptions.includes(key);
   const startDisabled = (key) => startingLevel && startingLevel !== key;
+  const weeklyLevelKey = (level) => String(level?.id || level?.price || level?.name || "");
 
   const aiLevelCreatedTime = (level) => new Date(level?.created_at || level?.updated_at || 0).getTime() || 0;
   const weeklySortPrice = (level) => {
@@ -3758,53 +3760,34 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {ownerMode && (
-          <div className="mt-6 rounded-3xl border border-zinc-800 bg-[#050505] p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+
+        {weeklyLevels.length > 0 && (
+          <div className="mt-6 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-xl shadow-black/30">
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Owner Signal Tools</div>
-                <p className="mt-1 text-sm text-zinc-400">Use this when fresh signals are coming in but the board looks empty because cards were pulled, filled, or submitted earlier.</p>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Weekly Levels</div>
+                <p className="mt-1 text-sm text-zinc-400">Saved weekly levels sorted by price.</p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button onClick={restorePulledAiCards} className="rounded-xl border border-[#00d27a] px-4 py-2 text-sm font-black text-[#00d27a] hover:bg-[#001f14]">Restore Pulled Cards</button>
-                <button onClick={restoreHiddenAiCards} className="rounded-xl bg-[#ffcc19] px-4 py-2 text-sm font-black text-black">Restore Hidden AI Cards</button>
-                <button onClick={fetchAiSignals} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm font-black text-zinc-200 hover:bg-zinc-900">Refresh Signal Feed</button>
-              </div>
+              <div className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">{weeklyLevels.length} saved</div>
             </div>
-
-            <div className="mt-5 grid gap-3 lg:grid-cols-2">
-              <div className="rounded-2xl border border-zinc-800 bg-black p-4">
-                <div className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Latest Signal Rows</div>
-                <div className="mt-3 grid gap-2">
-                  {latestSignalRows.length === 0 && <div className="text-sm text-zinc-500">No signal rows loaded yet.</div>}
-                  {latestSignalRows.slice(0, 6).map((row) => (
-                    <div key={row.id} className="rounded-xl border border-zinc-900 bg-[#090909] p-3 text-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <b className="text-[#ffcc19]">{row.signalName}</b>
-                        <span className="rounded-full border border-zinc-700 px-2 py-1 text-[10px] font-black text-zinc-300">{row.status}</span>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              {weeklyLevels.map((level) => {
+                const key = weeklyLevelKey(level);
+                const price = parsePrice(level.price);
+                const entry = parsePrice(form.tradeEntryPrice);
+                const awayPts = price !== null && entry !== null ? Math.abs(price - entry) : null;
+                return (
+                  <div key={key} className="rounded-2xl border border-zinc-800 bg-[#090909] p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-black text-white">{level.name || "Weekly Level"}</div>
+                        <div className="mt-1 text-2xl font-black text-[#ffcc19]">{fmtPrice(level.price)}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts from entry` : "Enter price to see distance"}</div>
                       </div>
-                      <div className="mt-1 text-zinc-300">{row.direction} {row.price !== null ? fmtPrice(row.price) : "--"} • {row.timeframe}</div>
-                      <div className="mt-1 text-xs text-zinc-500">{formatEastern(row.createdAt)}</div>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-zinc-800 bg-black p-4">
-                <div className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Board Gate Check</div>
-                <div className="mt-3 grid gap-2 text-sm text-zinc-300">
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Loaded signal rows</span><b className="text-white">{aiSignals.length}</b></div>
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Latest known price</span><b className="text-white">{latestKnownMarketPrice !== null ? fmtPrice(latestKnownMarketPrice) : "--"}</b></div>
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Board distance mode</span><b className="text-white">Alert-led</b></div>
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Built AI cards</span><b className="text-white">{aiAnchorsOnly.length}</b></div>
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Out of range waiting</span><b className="text-white">{outOfRangeAiAnchors.length}</b></div>
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Pulled cards hidden</span><b className="text-white">{Object.keys(pulledAnchorKeys).length}</b></div>
-                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Submitted cards hidden</span><b className="text-white">{Object.keys(submittedAnchorKeys).length}</b></div>
-                  <div className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-500">
-                    Board holds 12 normal cards and can expand to 16 only for stronger stacked setups. Cards still pass score, source-stack, duplicate, and {maxOrderCardDistancePoints.toLocaleString()} point alert-led distance gates.
                   </div>
-                </div>
-              </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -4005,6 +3988,55 @@ const exportJournalCSV = () => {
                     <div className={row.count > 0 ? "text-[#00d27a]" : "text-zinc-500"}>{row.count > 0 ? `${row.count} received/used` : "0 / not seen"}</div>
                   </div>
                 ))}
+              </div>
+            </Card>
+
+            <Card className="lg:col-span-2">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <Title>Owner Signal Tools</Title>
+                  <p className="mt-2 text-sm text-zinc-400">Use this when fresh signals are coming in but the board looks empty because cards were pulled, filled, or submitted earlier.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={restorePulledAiCards} className="rounded-xl border border-[#00d27a] px-4 py-2 text-sm font-black text-[#00d27a] hover:bg-[#001f14]">Restore Pulled Cards</button>
+                  <button onClick={restoreHiddenAiCards} className="rounded-xl bg-[#ffcc19] px-4 py-2 text-sm font-black text-black">Restore Hidden AI Cards</button>
+                  <button onClick={fetchAiSignals} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm font-black text-zinc-200 hover:bg-zinc-900">Refresh Signal Feed</button>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-2xl border border-zinc-800 bg-black p-4">
+                  <div className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Latest Signal Rows</div>
+                  <div className="mt-3 grid gap-2">
+                    {latestSignalRows.length === 0 && <div className="text-sm text-zinc-500">No signal rows loaded yet.</div>}
+                    {latestSignalRows.slice(0, 6).map((row) => (
+                      <div key={row.id} className="rounded-xl border border-zinc-900 bg-[#090909] p-3 text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <b className="text-[#ffcc19]">{row.signalName}</b>
+                          <span className="rounded-full border border-zinc-700 px-2 py-1 text-[10px] font-black text-zinc-300">{row.status}</span>
+                        </div>
+                        <div className="mt-1 text-zinc-300">{row.direction} {row.price !== null ? fmtPrice(row.price) : "--"} - {row.timeframe}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{formatEastern(row.createdAt)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-zinc-800 bg-black p-4">
+                  <div className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Board Gate Check</div>
+                  <div className="mt-3 grid gap-2 text-sm text-zinc-300">
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Loaded signal rows</span><b className="text-white">{aiSignals.length}</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Latest known price</span><b className="text-white">{latestKnownMarketPrice !== null ? fmtPrice(latestKnownMarketPrice) : "--"}</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Board distance mode</span><b className="text-white">Alert-led</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Built AI cards</span><b className="text-white">{aiAnchorsOnly.length}</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Out of range waiting</span><b className="text-white">{outOfRangeAiAnchors.length}</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Pulled cards hidden</span><b className="text-white">{Object.keys(pulledAnchorKeys).length}</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Submitted cards hidden</span><b className="text-white">{Object.keys(submittedAnchorKeys).length}</b></div>
+                    <div className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-500">
+                      Board holds 12 normal cards and can expand to 16 only for stronger stacked setups. Cards still pass score, source-stack, duplicate, and {maxOrderCardDistancePoints.toLocaleString()} point alert-led distance gates.
+                    </div>
+                  </div>
+                </div>
               </div>
             </Card>
 
