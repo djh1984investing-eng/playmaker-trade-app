@@ -1647,7 +1647,7 @@ useEffect(() => {
       || ((aPrice ?? Number.POSITIVE_INFINITY) - (bPrice ?? Number.POSITIVE_INFINITY));
   };
 
-  const qualifiedAiLimitZones = useMemo(() => {
+  const rankedAiLimitZones = useMemo(() => {
     const rawEvidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
     const seedLevels = [
       ...weeklyLevels.map((level) => ({ price: Number(level.price), direction: "Both", label: `Weekly ${level.name || "level"}`, sourceType: "Weekly Level", evidenceScore: 24, evidenceClass: "pillar", session: "WEEKLY", sourceId: `weekly-${level.id}`, created_at: level.created_at, payload: level, signalName: "Weekly Level", triggerPrice: null, levelKey: getLevelKey(level.price) })).filter((item) => Number.isFinite(item.price) && item.price > 0),
@@ -1783,17 +1783,15 @@ useEffect(() => {
       !zone.hasOnlyManualPillars
     ));
 
-    return [...scored].sort(compareBoardPriority);
-  }, [scannerAiSignals, weeklyLevels, craterBoxes, latestKnownMarketPrice]);
+    const ordered = [...scored].sort(compareBoardPriority);
 
-  const rankedAiLimitZones = useMemo(() => {
     const selected = [];
     const directionCounts = { Long: 0, Short: 0, Both: 0 };
     const baseBoardCardCap = 12;
     const maxBoardCardCap = 16;
     const baseDirectionCap = 5;
     const overflowDirectionCap = 7;
-    for (const zone of qualifiedAiLimitZones) {
+    for (const zone of ordered) {
       const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= levelMergeTolerance && (item.direction === zone.direction || item.direction === "Both" || zone.direction === "Both"));
       const dir = zone.direction === "Both" ? "Both" : zone.direction;
       const isOverflowSlot = selected.length >= baseBoardCardCap;
@@ -1808,7 +1806,7 @@ useEffect(() => {
       if (selected.length >= maxBoardCardCap) break;
     }
     return selected;
-  }, [qualifiedAiLimitZones]);
+  }, [scannerAiSignals, weeklyLevels, craterBoxes, latestKnownMarketPrice]);
 
   const feedAudit = useMemo(() => {
     const evidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
@@ -3428,8 +3426,8 @@ const exportJournalCSV = () => {
     }))
   ];
 
-  const outOfRangeAiAnchors = qualifiedAiLimitZones
-    .filter((zone) => !rankedAiLimitZones.some((visibleZone) => visibleZone.id === zone.id))
+  const outOfRangeAiAnchors = rankedAiLimitZones
+    .filter((zone) => !isInLatestMarketRange(zone))
     .filter((zone) => !submittedZoneMatches(zone))
     .filter((zone) => !pulledRecordForAnchor(zone))
     .map((zone) => ({
@@ -3836,7 +3834,7 @@ const exportJournalCSV = () => {
             <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Filled / Managing" subtitle="Filled cards move here so the main board can keep scanning. Submit to journal when you are done managing the trade." items={filledManagingLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} mode="filled" />
-            <LevelSection title="Waiting / Background Levels" subtitle="Qualified levels not on the main board yet. They can move up when price gets closer or when the stack becomes stronger than a visible card." items={outOfRangeAiAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            <LevelSection title="Out of Range / Waiting" subtitle={`Good confluence more than ${maxOrderCardDistancePoints.toLocaleString()} pts from latest known price. It auto-returns when price comes back and the stack still qualifies.`} items={outOfRangeAiAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Pulled Orders" subtitle="Cards pulled off the main board. Restore them if the limit is still good, or journal/delete them later." items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
           </div>
         )}
@@ -4081,11 +4079,11 @@ const exportJournalCSV = () => {
                     <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Latest known price</span><b className="text-white">{latestKnownMarketPrice !== null ? fmtPrice(latestKnownMarketPrice) : "--"}</b></div>
                     <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Board distance mode</span><b className="text-white">Alert-led</b></div>
                     <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Built AI cards</span><b className="text-white">{aiAnchorsOnly.length}</b></div>
-                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Waiting/background</span><b className="text-white">{outOfRangeAiAnchors.length}</b></div>
+                    <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Out of range waiting</span><b className="text-white">{outOfRangeAiAnchors.length}</b></div>
                     <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Pulled cards hidden</span><b className="text-white">{Object.keys(pulledAnchorKeys).length}</b></div>
                     <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Submitted cards hidden</span><b className="text-white">{Object.keys(submittedAnchorKeys).length}</b></div>
                     <div className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-500">
-                      Board shows 12 normal cards and can expand to 16 only for stronger stacked setups. Other qualified levels stay in Waiting / Background and can move up when price gets closer or the stack gets stronger.
+                      Board holds 12 normal cards and can expand to 16 only for stronger stacked setups. Cards still pass score, source-stack, duplicate, and {maxOrderCardDistancePoints.toLocaleString()} point alert-led distance gates.
                     </div>
                   </div>
                 </div>
