@@ -3486,15 +3486,6 @@ const exportJournalCSV = () => {
     }));
 
   const activeAnchors = useMemo(() => {
-    const compareAnchorPrice = (a, b) => {
-      const aPrice = parsePrice(a.entry || a.price);
-      const bPrice = parsePrice(b.entry || b.price);
-      if (aPrice === null && bPrice === null) return compareBoardPriority(a, b);
-      if (aPrice === null) return 1;
-      if (bPrice === null) return -1;
-      return aPrice - bPrice || compareBoardPriority(a, b);
-    };
-
     const best = new Map();
     rawActiveAnchors.forEach((anchor) => {
       const price = parsePrice(anchor.entry || anchor.price);
@@ -3509,7 +3500,7 @@ const exportJournalCSV = () => {
         best.set(key, anchor);
       }
     });
-    return Array.from(best.values()).sort(compareAnchorPrice);
+    return Array.from(best.values()).sort(compareBoardPriority);
   }, [rawActiveAnchors, latestKnownMarketPrice]);
   const aiAnchorsOnly = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
   const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
