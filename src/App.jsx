@@ -3275,6 +3275,13 @@ const exportJournalCSV = () => {
     sendDiscordBoardNotice({ event: "UNVERIFIED", title: "Playmaker Signal Verification Removed", detail, anchor });
   };
 
+  const [manualLetter, manualText] = grade(report.score);
+  const selectedAiScore = selectedTrade?.sourceType === "AI Signal" ? n(selectedTrade.score || selectedTrade.rawSignal?.ai_score || selectedTrade.rawSignal?.zone_score, 0) : 0;
+  const selectedAiPrecision = selectedTrade?.sourceType === "AI Signal" ? n(selectedTrade.precisionScore || selectedTrade.rawSignal?.precision_score, 0) : 0;
+  const letter = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? (selectedTrade.grade || selectedTrade.rawSignal?.ai_grade || grade(selectedAiScore)[0]) : manualLetter;
+  const text = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? "AI Level / Limit Anchor" : manualText;
+  const displayScore = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? selectedAiScore : report.score;
+  const displayPrecision = selectedTrade?.sourceType === "AI Signal" && selectedAiPrecision ? selectedAiPrecision : report.score;
   const unfilledOrders = journal.filter((j) => isOpenOrder(j));
   const signalUnfilledOrders = unfilledOrders.filter((order) => !isManualOrder(order));
 
@@ -3742,10 +3749,18 @@ const exportJournalCSV = () => {
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
           </div>
-          <div className="rounded-3xl border border-[#2c2300] bg-black p-4 text-xs text-zinc-300 shadow-xl shadow-black/50">
-            <div className="font-black text-[#ffcc19]">Logged in</div>
-            <div className="mt-2 break-all">{user?.email || "No email"}</div>
-            <button onClick={signOut} className="mt-4 rounded-lg border border-[#ffcc19] px-3 py-2 font-black text-[#ffcc19] hover:bg-[#171200]">Sign Out</button>
+          <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
+            <div className="flex items-start gap-5">
+              <div className="text-5xl font-black text-[#00e68a]">{letter}</div>
+              <div className="mt-2 rounded-full bg-[#00d27a] px-5 py-2 text-sm font-black text-black">{displayScore}/100</div>
+            </div>
+            <div className="mt-1 text-lg text-zinc-200">{text}</div>
+            <div className="mt-4 h-2 rounded-full bg-zinc-900"><div className="h-full rounded-full bg-[#00d27a]" style={{width: `${displayScore}%`}} /></div>
+            <div className="mt-4 rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-300">
+              <div className="font-black text-[#ffcc19]">Logged in</div>
+              <div className="mt-1 break-all">{user?.email || "No email"}</div>
+              <button onClick={signOut} className="mt-3 rounded-lg border border-[#ffcc19] px-3 py-2 font-black text-[#ffcc19] hover:bg-[#171200]">Sign Out</button>
+            </div>
           </div>
         </div>
 
