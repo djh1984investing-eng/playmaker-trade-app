@@ -3204,11 +3204,6 @@ const exportJournalCSV = () => {
   const displayPrecision = selectedTrade?.sourceType === "AI Signal" && selectedAiPrecision ? selectedAiPrecision : report.score;
   const unfilledOrders = journal.filter((j) => isOpenOrder(j));
   const signalUnfilledOrders = unfilledOrders.filter((order) => !isManualOrder(order));
-  const selectedEntryEvidence = selectedTrade?.evidence || selectedTrade?.rawSignal?.evidence || [];
-  const selectedVpEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").startsWith("Volume Profile"));
-  const selectedPocEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("POC"));
-  const selectedLvnEvidence = selectedEntryEvidence.filter((item) => String(item.sourceType || "").includes("LVN"));
-  const selectedEntryIsCrown = ["A+", "A"].includes(selectedTrade?.grade);
 
   const boardUnfilledOrders = ownerMode
     ? signalUnfilledOrders
@@ -3691,100 +3686,28 @@ const exportJournalCSV = () => {
 
         {tab === "trade" && (
           <>
-        <div className="mt-7 grid gap-5 md:grid-cols-5">
-          <Dash label="Confluences" value={report.confluences} />
-          <Dash label="Within 5 Points" value={report.within5} />
-          <Dash label="Zone Score" value={`${report.zoneScore}/100`} />
-          <Dash label="Precision Score" value={`${displayPrecision}/100`} />
-          <Dash label="Behavior Score" value={`${behavior.score}/10`} />
-        </div>
 
-        <div className="mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-black uppercase tracking-[0.18em] text-[#ffcc19]">Notification Center</div>
-              <p className="mt-1 text-sm text-zinc-500">Setup notifications only. Price-enter-zone alerts are parked until live price feed is added.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={requestDesktopNotifications} className="rounded-xl border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a]">Enable Popups / Sound / Voice</button>
-              <button onClick={() => setNotificationLog([])} className="rounded-xl border border-zinc-700 px-3 py-2 text-xs font-black text-zinc-300">Clear</button>
-            </div>
-          </div>
-          <div className="mt-3 grid gap-2 md:grid-cols-3">
-            {notificationLog.length === 0 && <div className="text-sm text-zinc-500">No new setup notifications yet.</div>}
-            {notificationLog.slice(0, 6).map((notice) => (
-              <div key={notice.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs">
-                <div className="font-black text-[#00d27a]">{notice.title}</div>
-                <div className="mt-1 text-zinc-400">{notice.detail}</div>
-                <div className="mt-1 text-zinc-600">{formatEastern(notice.createdAt)}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="relative mt-5 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-lg shadow-black/30">
-          {selectedEntryIsCrown && (
-            <div className="absolute right-4 top-4 rounded-2xl border border-[#ffcc19] bg-[#171200] px-3 py-2 text-2xl" title="Crown-grade entry">
-              👑
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-4 pr-14">
-            <div>
-              <div className="text-sm font-black tracking-[0.2em] text-[#ffcc19]">ENTRY CONFIRMATION / LIMIT PLACEMENT</div>
-              <div className="mt-2 text-2xl font-black text-white">{form.direction}: {Number(form.tradeEntryPrice || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-              <div className="mt-1 text-sm text-zinc-400">Starting Level: {startingLevel || "None selected"} • Top 3 within 5 pts: {report.topWithin5}/3 • Far levels: {report.farCount}</div>
-              {selectedTrade?.clusterWidth !== undefined && (
-                <div className="mt-2 rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-300">
-                  <b className="text-[#ffcc19]">Entry stack center:</b> {fmtPrice(selectedTrade.entry)} •
-                  <b className="ml-2 text-[#ffcc19]">Full range:</b> {fmtPrice(selectedTrade.clusterLow)}–{fmtPrice(selectedTrade.clusterHigh)} •
-                  <b className="ml-2 text-[#ffcc19]">Width:</b> {fmt(selectedTrade.clusterWidth)} pts
-                  <div className="mt-1 text-zinc-500">
-                    VP confirmation: {selectedVpEvidence.length} source(s){selectedPocEvidence.length ? ` • POC ${selectedPocEvidence.length}` : ""}{selectedLvnEvidence.length ? ` • LVN/crater ${selectedLvnEvidence.length}` : ""}
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="grid gap-2 text-sm text-zinc-300 md:grid-cols-3">
-              {recommendations.map((r) => (
-                <div key={r.stop} className={`rounded-xl border bg-[#090909] p-3 ${r.valid === false ? "border-zinc-700 opacity-70" : "border-zinc-800"}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="font-black text-[#ffcc19]">{r.stop}pt Stop</div>
-                    <div className={`rounded-full px-2 py-1 text-[10px] font-black ${r.valid === false ? "bg-zinc-700 text-zinc-300" : "bg-[#00d27a] text-black"}`}>{r.confidence}</div>
-                  </div>
-                  <div>Limit: {Number(r.limit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                  <div>Stop: {Number(r.stopArea).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-                  {r.note && <div className="mt-1 text-[11px] text-zinc-500">{r.note}</div>}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
 
 
         {weeklyLevels.length > 0 && (
-          <div className="mt-6 rounded-3xl border border-[#2c2300] bg-black p-5 shadow-xl shadow-black/30">
+          <div className="mt-5 rounded-2xl border border-[#2c2300] bg-black p-3 shadow-lg shadow-black/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Weekly Levels</div>
-                <p className="mt-1 text-sm text-zinc-400">Saved weekly levels sorted by price.</p>
+                <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
               </div>
               <div className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">{weeklyLevels.length} saved</div>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
               {weeklyLevels.map((level) => {
                 const key = weeklyLevelKey(level);
                 const price = parsePrice(level.price);
                 const entry = parsePrice(form.tradeEntryPrice);
                 const awayPts = price !== null && entry !== null ? Math.abs(price - entry) : null;
                 return (
-                  <div key={key} className="rounded-2xl border border-zinc-800 bg-[#090909] p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-black text-white">{level.name || "Weekly Level"}</div>
-                        <div className="mt-1 text-2xl font-black text-[#ffcc19]">{fmtPrice(level.price)}</div>
-                        <div className="mt-1 text-xs text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts from entry` : "Enter price to see distance"}</div>
-                      </div>
-                    </div>
+                  <div key={key} className="rounded-xl border border-zinc-800 bg-[#090909] p-3">
+                    <div className="truncate text-xs font-black text-white">{level.name || "Weekly Level"}</div>
+                    <div className="mt-1 text-lg font-black text-[#ffcc19]">{fmtPrice(level.price)}</div>
+                    <div className="mt-1 text-[11px] text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts away` : "--"}</div>
                   </div>
                 );
               })}
@@ -3814,35 +3737,55 @@ const exportJournalCSV = () => {
                   </>
         )}
 
-        <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={exportSetup} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black shadow-lg shadow-yellow-950/30">Export Setup Report</button>
-          <button onClick={printSetup} className="rounded-xl border border-[#ffcc19] bg-black px-5 py-3 font-black text-[#ffcc19] hover:bg-[#171200]">Print / Save PDF</button>
-        </div>
-
-        {tab === "trade" && (
-          <div className="mt-6 grid gap-5 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <Title>Trade Info</Title>
-              <div className="grid gap-5 md:grid-cols-3 mt-5">
-                <Field label="Trade Entry Price" value={form.tradeEntryPrice} onChange={(v) => set("tradeEntryPrice", v)} />
-                <Select label="Long / Short" value={form.direction} options={["Long", "Short"]} onChange={(v) => set("direction", v)} />
-                <Select label="Trend" value={form.trend} options={["With Trend", "Against Trend", "Neutral"]} onChange={(v) => set("trend", v)} />
-                <Select label="1H Bias" value={form.bias1H} options={["Bullish", "Bearish", "Indecisive"]} onChange={(v) => set("bias1H", v)} />
-                <Select label="4H Bias" value={form.bias4H} options={["Bullish", "Bearish", "Indecisive"]} onChange={(v) => set("bias4H", v)} />
-              </div>
-              <button onClick={submitOrder} className="mt-5 rounded-xl bg-[#00d27a] px-5 py-3 font-black text-black">
-                Submit Order
-              </button>
-            </Card>
-            <Card>
-              <Title>Adjusted Recommendations</Title>
-              <div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div>
-            </Card>
-          </div>
-        )}
-
         {tab === "checklist" && (
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
+            <Card className="lg:col-span-2">
+              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-black uppercase tracking-[0.2em] text-[#ffcc19]">Entry Confirmation / Limit Placement</div>
+                  <div className="mt-3 grid gap-5 md:grid-cols-3">
+                    <Field label="Trade Entry Price" value={form.tradeEntryPrice} onChange={(v) => set("tradeEntryPrice", v)} />
+                    <Select label="Long / Short" value={form.direction} options={["Long", "Short"]} onChange={(v) => set("direction", v)} />
+                    <Select label="Trend" value={form.trend} options={["With Trend", "Against Trend", "Neutral"]} onChange={(v) => set("trend", v)} />
+                    <Select label="1H Bias" value={form.bias1H} options={["Bullish", "Bearish", "Indecisive"]} onChange={(v) => set("bias1H", v)} />
+                    <Select label="4H Bias" value={form.bias4H} options={["Bullish", "Bearish", "Indecisive"]} onChange={(v) => set("bias4H", v)} />
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button onClick={submitOrder} className="rounded-xl bg-[#00d27a] px-5 py-3 font-black text-black">
+                      Submit Order
+                    </button>
+                    <button onClick={exportSetup} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black shadow-lg shadow-yellow-950/30">Export Setup Report</button>
+                    <button onClick={printSetup} className="rounded-xl border border-[#ffcc19] bg-black px-5 py-3 font-black text-[#ffcc19] hover:bg-[#171200]">Print / Save PDF</button>
+                  </div>
+                  <div className="mt-4 text-sm text-zinc-400">
+                    Starting Level: {startingLevel || "None selected"} - Top 3 within 5 pts: {report.topWithin5}/3 - Far levels: {report.farCount}
+                  </div>
+                </div>
+                <div className="grid w-full gap-3 xl:w-[520px]">
+                  {recommendations.map((r) => <Rec key={r.stop} r={r} />)}
+                </div>
+              </div>
+              {weeklyLevels.length > 0 && (
+                <div className="mt-5 border-t border-zinc-800 pt-4">
+                  <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-4">
+                    {weeklyLevels.map((level) => {
+                      const key = weeklyLevelKey(level);
+                      const price = parsePrice(level.price);
+                      const entry = parsePrice(form.tradeEntryPrice);
+                      const awayPts = price !== null && entry !== null ? Math.abs(price - entry) : null;
+                      return (
+                        <div key={key} className="rounded-xl border border-zinc-800 bg-[#090909] p-3">
+                          <div className="truncate text-xs font-black text-white">{level.name || "Weekly Level"}</div>
+                          <div className="mt-1 text-lg font-black text-[#ffcc19]">{fmtPrice(level.price)}</div>
+                          <div className="mt-1 text-[11px] text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts away` : "--"}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </Card>
             <Card className="lg:col-span-2">
               <Title>Manual Level Scanner</Title>
               <div className="mt-5 grid gap-4 md:grid-cols-5">
