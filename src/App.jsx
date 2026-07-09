@@ -3690,24 +3690,21 @@ const exportJournalCSV = () => {
 
 
         {weeklyLevels.length > 0 && (
-          <div className="mt-5 rounded-2xl border border-[#2c2300] bg-black p-3 shadow-lg shadow-black/20">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
-              </div>
-              <div className="text-xs font-black uppercase tracking-[0.16em] text-zinc-500">{weeklyLevels.length} saved</div>
+          <div className="mt-5 rounded-2xl border border-[#2c2300] bg-black px-3 py-2 shadow-lg shadow-black/20">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
+              <div className="text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">{weeklyLevels.length} saved</div>
             </div>
-            <div className="mt-3 grid gap-2 md:grid-cols-4">
+            <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
               {weeklyLevels.map((level) => {
                 const key = weeklyLevelKey(level);
                 const price = parsePrice(level.price);
                 const entry = parsePrice(form.tradeEntryPrice);
                 const awayPts = price !== null && entry !== null ? Math.abs(price - entry) : null;
                 return (
-                  <div key={key} className="rounded-xl border border-zinc-800 bg-[#090909] p-3">
-                    <div className="truncate text-xs font-black text-white">{level.name || "Weekly Level"}</div>
-                    <div className="mt-1 text-lg font-black text-[#ffcc19]">{fmtPrice(level.price)}</div>
-                    <div className="mt-1 text-[11px] text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts away` : "--"}</div>
+                  <div key={key} className="rounded-lg border border-zinc-800 bg-[#090909] px-2 py-1 text-[11px] leading-tight">
+                    <span className="font-black text-[#ffcc19]">{fmtPrice(level.price)}</span>
+                    <span className="ml-1 text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts` : ""}</span>
                   </div>
                 );
               })}
@@ -3766,19 +3763,21 @@ const exportJournalCSV = () => {
                 </div>
               </div>
               {weeklyLevels.length > 0 && (
-                <div className="mt-5 border-t border-zinc-800 pt-4">
-                  <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
-                  <div className="mt-3 grid gap-2 md:grid-cols-4">
+                <div className="mt-5 rounded-2xl border border-zinc-800 bg-black px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Weekly Levels</div>
+                    <div className="text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">{weeklyLevels.length} saved</div>
+                  </div>
+                  <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
                     {weeklyLevels.map((level) => {
                       const key = weeklyLevelKey(level);
                       const price = parsePrice(level.price);
                       const entry = parsePrice(form.tradeEntryPrice);
                       const awayPts = price !== null && entry !== null ? Math.abs(price - entry) : null;
                       return (
-                        <div key={key} className="rounded-xl border border-zinc-800 bg-[#090909] p-3">
-                          <div className="truncate text-xs font-black text-white">{level.name || "Weekly Level"}</div>
-                          <div className="mt-1 text-lg font-black text-[#ffcc19]">{fmtPrice(level.price)}</div>
-                          <div className="mt-1 text-[11px] text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts away` : "--"}</div>
+                        <div key={key} className="rounded-lg border border-zinc-800 bg-[#090909] px-2 py-1 text-[11px] leading-tight">
+                          <span className="font-black text-[#ffcc19]">{fmtPrice(level.price)}</span>
+                          <span className="ml-1 text-zinc-500">{awayPts !== null ? `${fmt(awayPts)} pts` : ""}</span>
                         </div>
                       );
                     })}
