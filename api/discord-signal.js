@@ -23,6 +23,25 @@ const isManualAnchor = ({ event = "", title = "", detail = "", anchor = {} } = {
   return !isAiSignal && (sourceType.includes("manual") || signalName.includes("manual") || text.includes("manual order") || text.includes("manual scan"));
 };
 
+const hasOnlyManualPillars = (anchor = {}) => {
+  const evidence = Array.isArray(anchor.evidence)
+    ? anchor.evidence
+    : Array.isArray(anchor.rawSignal?.evidence)
+      ? anchor.rawSignal.evidence
+      : Array.isArray(anchor.payload?.evidence)
+        ? anchor.payload.evidence
+        : [];
+  const manualSourceTypes = new Set(["weekly level", "volume crater / lvn"]);
+  return Boolean(anchor.hasOnlyManualPillars) || (evidence.length > 0 && evidence.every((item) => manualSourceTypes.has(String(item?.sourceType || "").toLowerCase())));
+};
+
+const isDiscordEligibleSignal = (anchor = {}) => {
+  if (!anchor || isManualAnchor({ anchor }) || hasOnlyManualPillars(anchor)) return false;
+  const sourceType = String(anchor.sourceType || anchor.source_type || anchor.rawSignal?.sourceType || anchor.payload?.sourceType || "").toLowerCase();
+  const signalName = String(anchor.signalName || anchor.rawSignal?.signal || anchor.payload?.signal || "").toLowerCase();
+  return sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
+};
+
 const normalizePrice = (value) => {
   const parsed = Number(String(value ?? "").replace(/,/g, ""));
   return Number.isFinite(parsed) ? String(Math.round(parsed * 4) / 4) : "NA";
@@ -34,7 +53,8 @@ const discordEventKey = ({ event = "UPDATE", title = "", detail = "", anchor = {
   const grade = String(anchor.grade || anchor.rawSignal?.ai_grade || "");
   const sources = String(anchor.sourceCount || anchor.evidence?.length || anchor.rawSignal?.evidence?.length || "");
   const signature = String(anchor.signature || anchor.evidenceSignature || anchor.rawSignal?.id || anchor.id || "").slice(0, 80);
-  return [event, direction, entry, grade, sources, signature].map((part) => String(part || "").trim()).join("|");
+  const detailSignature = ["VERIFIED", "NOTE_UPDATED"].includes(String(event).toUpperCase()) ? String(detail || "").slice(0, 160) : "";
+  return [event, direction, entry, grade, sources, signature, detailSignature].map((part) => String(part || "").trim()).join("|");
 };
 
 const shouldSkipDuplicate = (payload) => {
@@ -53,6 +73,7 @@ const shouldSkipDuplicate = (payload) => {
 const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", detail = "", anchor = {} }) => {
   if (!discordWebhookUrl) return { skipped: true };
   if (isManualAnchor({ event, title, detail, anchor })) return { skipped: true, reason: "Manual order notices are local only" };
+  if (!isDiscordEligibleSignal(anchor)) return { skipped: true, reason: "Only Playmaker signal events go to Discord" };
   if (shouldSkipDuplicate({ event, title, detail, anchor })) return { skipped: true, reason: "Duplicate notice skipped" };
 
   const direction = String(anchor.direction || anchor.rawSignal?.direction || "").toUpperCase();

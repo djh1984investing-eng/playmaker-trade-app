@@ -178,12 +178,35 @@ const isOpenOrder = (item) => {
   return result === "unfilled" || result === "edge" || orderStatus === "unfilled" || item?.pendingOrder === true;
 };
 
+const isCompletedTradeResult = (item) => {
+  return ["win", "loss", "be"].includes(normalizeStatus(item?.result));
+};
+
 const isManualOrder = (item) => {
   const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
   const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
   const eventText = String(item?.event || item?.title || item?.detail || item?.notes || "").toLowerCase();
   const isAiSignal = sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
   return !isAiSignal && (sourceType.includes("manual") || signalName.includes("manual") || eventText.includes("manual order") || eventText.includes("manual scan"));
+};
+
+const hasOnlyManualPillars = (anchor = {}) => {
+  const evidence = Array.isArray(anchor?.evidence)
+    ? anchor.evidence
+    : Array.isArray(anchor?.rawSignal?.evidence)
+      ? anchor.rawSignal.evidence
+      : Array.isArray(anchor?.payload?.evidence)
+        ? anchor.payload.evidence
+        : [];
+  const manualSourceTypes = new Set(["weekly level", "volume crater / lvn"]);
+  return Boolean(anchor?.hasOnlyManualPillars) || (evidence.length > 0 && evidence.every((item) => manualSourceTypes.has(String(item?.sourceType || "").toLowerCase())));
+};
+
+const isDiscordEligibleSignal = (anchor = null) => {
+  if (!anchor || isManualOrder(anchor) || hasOnlyManualPillars(anchor)) return false;
+  const sourceType = String(anchor?.sourceType || anchor?.source_type || anchor?.rawSignal?.sourceType || anchor?.payload?.sourceType || "").toLowerCase();
+  const signalName = String(anchor?.signalName || anchor?.rawSignal?.signal || anchor?.payload?.signal || "").toLowerCase();
+  return sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
 };
 
 const loadStoredNoticeKeys = () => {
@@ -211,8 +234,9 @@ const discordNoticeKey = ({ event = "UPDATE", title = "", detail = "", anchor = 
   const grade = String(anchor?.grade || anchor?.rawSignal?.ai_grade || "");
   const sources = String(anchor?.sourceCount || anchor?.evidence?.length || anchor?.rawSignal?.evidence?.length || "");
   const signature = String(anchor?.signature || anchor?.evidenceSignature || anchor?.rawSignal?.id || anchor?.id || "").slice(0, 80);
+  const detailSignature = ["VERIFIED", "NOTE_UPDATED"].includes(String(event).toUpperCase()) ? String(detail || "").slice(0, 160) : "";
   const normalizedPrice = price === null ? "NA" : String(Math.round(price * 4) / 4);
-  return [event, direction, normalizedPrice, grade, sources, signature].map((part) => String(part || "").trim()).join("|");
+  return [event, direction, normalizedPrice, grade, sources, signature, detailSignature].map((part) => String(part || "").trim()).join("|");
 };
 
 const sameTradeAnchor = (a, b) => {
@@ -449,6 +473,7 @@ useEffect(() => {
 
   const previousAnchorMapRef = useRef(null);
   const sentDiscordNoticeKeysRef = useRef(new Set(Object.keys(seenNotificationKeys)));
+  const suppressDiscordUntilRef = useRef(0);
   const notificationAudioRef = useRef(null);
 
   useEffect(() => {
@@ -525,7 +550,8 @@ useEffect(() => {
 
   const sendDiscordBoardNotice = async ({ event, title = "Playmaker Signal", detail = "", anchor = null }) => {
     if (!ownerMode || !user) return;
-    if (!anchor || isManualAnchor(anchor)) return;
+    if (Date.now() < suppressDiscordUntilRef.current) return;
+    if (!anchor || isManualAnchor(anchor) || !isDiscordEligibleSignal(anchor)) return;
 
     const dedupeKey = `DISCORD|${discordNoticeKey({ event, title, detail, anchor })}`;
     if (sentDiscordNoticeKeysRef.current.has(dedupeKey) || seenNotificationKeys[dedupeKey]) return;
@@ -718,21 +744,17 @@ useEffect(() => {
     if (!user) return;
     try {
       const saved = JSON.parse(localStorage.getItem("playmaker_filled_anchor_keys") || "{}");
-      if (ownerMode && saved && typeof saved === "object") {
+      if (saved && typeof saved === "object") {
         setFilledAnchorKeys(saved);
-      } else if (!ownerMode) {
-        localStorage.removeItem("playmaker_filled_anchor_keys");
-        setFilledAnchorKeys({});
       }
     } catch (_err) {}
-  }, [user, ownerMode]);
+  }, [user]);
 
   useEffect(() => {
-    if (!ownerMode) return;
     try {
       localStorage.setItem("playmaker_filled_anchor_keys", JSON.stringify(filledAnchorKeys));
     } catch (_err) {}
-  }, [filledAnchorKeys, ownerMode]);
+  }, [filledAnchorKeys]);
 
   useEffect(() => {
     if (!user) return;
@@ -772,10 +794,33 @@ useEffect(() => {
 
       const nextVerified = {};
       const nextNotes = {};
+      const nextFilled = {};
+      const clearedFilled = [];
 
       (data || []).forEach((row) => {
         const key = String(row.anchor_key || row.card_id || "").trim();
-        if (!key || !(row.verified || row.owner_note)) return;
+        if (!key) return;
+
+        if (key.startsWith("FILLED|")) {
+          const filledKey = key.replace(/^FILLED\|/, "");
+          if (!row.owner_note) {
+            if (filledKey) clearedFilled.push(filledKey);
+            return;
+          }
+          try {
+            const filledRecord = JSON.parse(row.owner_note);
+            if (filledRecord?.anchorSnapshot && filledKey) {
+              nextFilled[filledKey] = {
+                filledAt: filledRecord.filledAt || row.updated_at || new Date().toISOString(),
+                detail: filledRecord.detail || "",
+                anchorSnapshot: filledRecord.anchorSnapshot
+              };
+            }
+          } catch (_err) {}
+          return;
+        }
+
+        if (!(row.verified || row.owner_note)) return;
 
         const directionFromKey = key.split("|")[0] || "BOTH";
         const verification = {
@@ -793,6 +838,11 @@ useEffect(() => {
 
       setVerifiedAnchors((prev) => ({ ...prev, ...nextVerified }));
       setOwnerSignalNotes((prev) => ({ ...prev, ...nextNotes }));
+      setFilledAnchorKeys((prev) => {
+        const next = { ...prev, ...nextFilled };
+        clearedFilled.forEach((key) => delete next[key]);
+        return next;
+      });
     };
 
     fetchBoardVerification();
@@ -2094,10 +2144,10 @@ useEffect(() => {
   }, [report.rows, form.tradeEntryPrice, form.direction, selectedTrade]);
 
   const behavior = useMemo(() => {
-    const closed = journal.filter((j) => !isOpenOrder(j));
-    const wins = closed.filter((j) => j.result === "Win").length;
-    const losses = closed.filter((j) => j.result === "Loss").length;
-    const be = closed.filter((j) => j.result === "BE").length;
+    const closed = journal.filter((j) => isCompletedTradeResult(j));
+    const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
+    const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
+    const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
     const notesText = journal.map((j) => j.notes || "").join(" ").toLowerCase();
     let score = 5;
     if (closed.length >= 3 && wins > losses) score += 2;
@@ -2109,16 +2159,16 @@ useEffect(() => {
   }, [journal]);
 
   const journalStats = useMemo(() => {
-    const closed = journal.filter((j) => !isOpenOrder(j));
-    const wins = closed.filter((j) => j.result === "Win").length;
-    const losses = closed.filter((j) => j.result === "Loss").length;
-    const be = closed.filter((j) => j.result === "BE").length;
+    const closed = journal.filter((j) => isCompletedTradeResult(j));
+    const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
+    const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
+    const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
     const unfilled = journal.filter((j) => isOpenOrder(j)).length;
     const totalPL = closed.reduce((sum, j) => sum + n(j.profitLoss), 0);
     const avgPL = closed.length ? totalPL / closed.length : 0;
     const avgMove = closed.length ? closed.reduce((sum, j) => sum + n(j.maxMove), 0) / closed.length : 0;
     const avgDrawdown = closed.length ? closed.reduce((sum, j) => sum + n(j.maxDrawdown), 0) / closed.length : 0;
-    const avgDiscount = journal.length ? journal.reduce((sum, j) => sum + n(j.discountPoints), 0) / journal.length : 0;
+    const avgDiscount = closed.length ? closed.reduce((sum, j) => sum + n(j.discountPoints), 0) / closed.length : 0;
     const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
     return { total: journal.length, closed: closed.length, wins, losses, be, unfilled, winRate, totalPL, avgPL, avgMove, avgDrawdown, avgDiscount };
   }, [journal]);
@@ -2512,6 +2562,7 @@ const exportJournalCSV = () => {
     const ok = window.confirm("Delete this journal entry?");
     if (!ok) return;
 
+    suppressDiscordUntilRef.current = Date.now() + 5000;
     setJournal((prev) => prev.filter((row) => String(row.id) !== String(item.id)));
 
     if (editingId && String(editingId) === String(item.id)) {
@@ -2755,6 +2806,7 @@ const exportJournalCSV = () => {
       delete next[baseKey];
       return next;
     });
+    clearFilledBoardState(baseKey);
 
     setPulledAnchorKeys((prev) => {
       const next = { ...prev };
@@ -2789,16 +2841,33 @@ const exportJournalCSV = () => {
 
       if (error) {
         console.error("Playmaker board state save error:", error, payload);
-        alert(`Verification did not save to Supabase: ${error.message || error}`);
+        alert(`Board update did not save to Supabase: ${error.message || error}`);
         return false;
       }
 
       return true;
     } catch (err) {
       console.error("Playmaker board state save failed:", err, payload);
-      alert(`Verification did not save to Supabase: ${err?.message || err}`);
+      alert(`Board update did not save to Supabase: ${err?.message || err}`);
       return false;
     }
+  };
+
+  const saveFilledBoardState = async (baseKey, record) => {
+    if (!ownerMode || !baseKey) return false;
+    return saveBoardState(`FILLED|${baseKey}`, {
+      owner_note: record ? JSON.stringify({
+        kind: "filled",
+        filledAt: record.filledAt,
+        detail: record.detail,
+        anchorSnapshot: record.anchorSnapshot
+      }) : null
+    });
+  };
+
+  const clearFilledBoardState = async (baseKey) => {
+    if (!ownerMode || !baseKey) return false;
+    return saveFilledBoardState(baseKey, null);
   };
 
   const markAnchorHiddenNow = (anchor) => {
@@ -2859,7 +2928,7 @@ const exportJournalCSV = () => {
     });
   };
 
-  const markAnchorFilled = (anchor) => {
+  const markAnchorFilled = async (anchor) => {
     if (!anchor) return;
     const key = anchorBaseKey(anchor);
     const entryValue = anchor.entry ?? anchor.price ?? anchor.rawSignal?.entry ?? anchor.rawSignal?.price ?? "";
@@ -2885,14 +2954,17 @@ const exportJournalCSV = () => {
       evidence: anchor.evidence || anchor.rawSignal?.evidence || anchor.payload?.evidence || []
     };
 
+    const filledRecord = {
+      filledAt: new Date().toISOString(),
+      detail,
+      anchorSnapshot
+    };
+
     setFilledAnchorKeys((prev) => ({
       ...prev,
-      [key]: {
-        filledAt: new Date().toISOString(),
-        detail,
-        anchorSnapshot
-      }
+      [key]: filledRecord
     }));
+    await saveFilledBoardState(key, filledRecord);
     setNotificationLog((prev) => [{
       key: `FILLED-${key}-${Date.now()}`,
       kind: "FILLED",
@@ -3140,13 +3212,16 @@ const exportJournalCSV = () => {
     const keys = anchorVerificationKeys(anchor);
     if (!keys.length) return;
 
+    const existingVerification = getAnchorVerification(anchor);
+    const wasAlreadyVerified = Boolean(existingVerification?.verified);
     const direction = String(anchor.direction || "Both").toUpperCase();
     const verification = {
       verified: true,
       verifiedBy: "Mr. DJ Harrison",
       label: `Mr. DJ Harrison Verified ${direction}`,
       direction,
-      verifiedAt: new Date().toISOString(),
+      verifiedAt: existingVerification?.verifiedAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       ownerNote: String(ownerNote || "").trim()
     };
 
@@ -3167,8 +3242,13 @@ const exportJournalCSV = () => {
       submitted: false
     })));
 
-    const detail = `${direction} ${fmtPrice(anchor.entry || anchor.price)} - verified by Mr. DJ Harrison${verification.ownerNote ? ` - ${verification.ownerNote}` : ""} - ${formatEastern(new Date())}`;
-    sendDiscordBoardNotice({ event: "VERIFIED", title: "Playmaker Signal Verified", detail, anchor: { ...anchor, verification } });
+    const detail = `${direction} ${fmtPrice(anchor.entry || anchor.price)} - ${wasAlreadyVerified ? "verification note updated" : "verified by Mr. DJ Harrison"}${verification.ownerNote ? ` - ${verification.ownerNote}` : ""} - ${formatEastern(new Date())}`;
+    sendDiscordBoardNotice({
+      event: wasAlreadyVerified ? "NOTE_UPDATED" : "VERIFIED",
+      title: wasAlreadyVerified ? "Playmaker Signal Note Updated" : "Playmaker Signal Verified",
+      detail,
+      anchor: { ...anchor, verification }
+    });
   };
 
   const removeAnchorVerification = async (anchor) => {
@@ -3454,6 +3534,7 @@ const exportJournalCSV = () => {
     priorAnchorMap.forEach((oldAnchor, anchorKey) => {
       if (currentAnchorMap.has(anchorKey)) return;
       if (submittedAnchorKeys[`${anchorKey}|`] || submittedAnchorKeys[anchorSubmitKey(oldAnchor)]) return;
+      if (filledAnchorKeys[anchorKey] || filledAnchorKeys[`${anchorKey}|`]) return;
       const directionText = String(oldAnchor.direction || "BOTH").toUpperCase();
       const priceText = fmtPrice(oldAnchor.entry || oldAnchor.price);
       const gradeText = oldAnchor.grade || "Setup";
@@ -3473,11 +3554,11 @@ const exportJournalCSV = () => {
     }
 
     previousAnchorMapRef.current = currentAnchorMap;
-  }, [activeAnchors, seenNotificationKeys, submittedAnchorKeys]);
+  }, [activeAnchors, seenNotificationKeys, submittedAnchorKeys, filledAnchorKeys]);
 
 
   const learningStats = useMemo(() => {
-    const closed = journal.filter((item) => !isOpenOrder(item));
+    const closed = journal.filter((item) => isCompletedTradeResult(item));
     const bySource = {};
     closed.forEach((item) => {
       const sources = Array.isArray(item.formSnapshot?.evidence) ? item.formSnapshot.evidence : [];
@@ -3485,9 +3566,10 @@ const exportJournalCSV = () => {
       sourceNames.forEach((name) => {
         if (!bySource[name]) bySource[name] = { name, trades: 0, wins: 0, losses: 0, be: 0, maxMove: 0, maxDrawdown: 0, bigMove200: 0 };
         bySource[name].trades += 1;
-        if (item.result === "Win") bySource[name].wins += 1;
-        if (item.result === "Loss") bySource[name].losses += 1;
-        if (item.result === "BE") bySource[name].be += 1;
+        const result = normalizeStatus(item.result);
+        if (result === "win") bySource[name].wins += 1;
+        if (result === "loss") bySource[name].losses += 1;
+        if (result === "be") bySource[name].be += 1;
         if (n(item.maxMove) >= 200) bySource[name].bigMove200 += 1;
         bySource[name].maxMove += n(item.maxMove);
         bySource[name].maxDrawdown += n(item.maxDrawdown);
@@ -3711,6 +3793,29 @@ const exportJournalCSV = () => {
             </div>
           </div>
         )}
+
+        <div className="mt-4 rounded-2xl border border-[#2c2300] bg-black p-3 shadow-lg shadow-black/20">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Notification Center</div>
+              <p className="mt-1 text-xs text-zinc-500">Setup changes, filled/manage moves, and owner updates.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={requestDesktopNotifications} className="rounded-lg border border-[#00d27a] px-3 py-2 text-[11px] font-black text-[#00d27a]">Enable Alerts</button>
+              <button onClick={() => setNotificationLog([])} className="rounded-lg border border-zinc-700 px-3 py-2 text-[11px] font-black text-zinc-300">Clear</button>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-3">
+            {notificationLog.length === 0 && <div className="text-xs text-zinc-500">No new setup notifications yet.</div>}
+            {notificationLog.slice(0, 6).map((notice) => (
+              <div key={notice.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs">
+                <div className="font-black text-[#00d27a]">{notice.title}</div>
+                <div className="mt-1 text-zinc-400">{notice.detail}</div>
+                <div className="mt-1 text-zinc-600">{formatEastern(notice.createdAt)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {(activeAnchors.length > 0 || filledManagingLevels.length > 0 || outOfRangeAiAnchors.length > 0 || pulledAnchors.length > 0) && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
@@ -4214,7 +4319,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
   const verificationBaseKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
-  const verification = anchor.verification || verifiedAnchors[verificationBaseKey] || verifiedAnchors[`${verificationBaseKey}|`] || verifiedAnchors[verificationKey] || null;
+  const verification = verifiedAnchors[verificationBaseKey] || verifiedAnchors[`${verificationBaseKey}|`] || verifiedAnchors[verificationKey] || anchor.verification || null;
   const verifiedLabel = verification?.label || (verification?.verified ? `Mr. DJ Harrison Verified ${String(anchor.direction || "Both").toUpperCase()}` : "");
   const filledKey = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchor.entry ? String(Math.round(Number(String(anchor.entry).replace(/,/g, "")) * 4) / 4) : "NA"}`;
   const filledRecord = filledAnchorKeys[filledKey] || null;
@@ -4488,7 +4593,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
             className="h-20 w-full rounded-xl border border-zinc-700 bg-black p-3 text-xs text-white outline-none focus:border-[#ffcc19]"
           />
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => onVerify?.(anchor, draftOwnerNote)} className="rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black">Verify Setup + Save Note</button>
+            <button onClick={() => onVerify?.(anchor, draftOwnerNote)} className="rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black">{verifiedLabel ? "Update Verify Note" : "Verify Setup + Save Note"}</button>
             {verifiedLabel && <button onClick={() => onUnverify?.(anchor)} className="rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400">Remove Verify</button>}
           </div>
         </div>
@@ -4823,6 +4928,24 @@ function Field({ label, value, onChange, disabled }) {
   return <label className="block"><span className="mb-2 block text-sm text-zinc-300">{label}</span><input disabled={disabled} value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white outline-none focus:border-[#ffcc19] disabled:opacity-40" /></label>;
 }
 
+function PointStepper({ label, value, onChange, step = 1 }) {
+  const adjust = (amount) => {
+    const next = Math.round((n(value, 0) + amount) * 100) / 100;
+    onChange(String(next));
+  };
+
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm text-zinc-300">{label}</span>
+      <div className="grid grid-cols-[44px_1fr_44px] overflow-hidden rounded-lg border border-zinc-700 bg-[#0b0b0b] focus-within:border-[#ffcc19]">
+        <button type="button" onClick={() => adjust(-step)} className="border-r border-zinc-800 text-xl font-black text-[#ffcc19] hover:bg-[#171200]">-</button>
+        <input value={value} onChange={(e) => onChange(e.target.value)} className="min-w-0 bg-transparent px-4 py-3 text-center text-white outline-none" />
+        <button type="button" onClick={() => adjust(step)} className="border-l border-zinc-800 text-xl font-black text-[#00d27a] hover:bg-[#001a0f]">+</button>
+      </div>
+    </label>
+  );
+}
+
 function Select({ label, value, options, onChange }) {
   return <label className="block"><span className="mb-2 block text-sm text-zinc-300">{label}</span><select value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-lg border border-zinc-700 bg-[#0b0b0b] px-4 py-3 text-white outline-none focus:border-[#ffcc19]">{options.map((o) => <option key={o}>{o}</option>)}</select></label>;
 }
@@ -4880,12 +5003,12 @@ function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEnt
         <Title>{editingId ? "Edit Report" : "Report Result"}</Title>
         <div className="mt-5 grid gap-4">
           <Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} />
-          <Field label="Max Move" value={form.maxMove} onChange={(v) => set("maxMove", v)} />
-          <Field label="Max Drawdown" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} />
+          <PointStepper label="Max Move Points" value={form.maxMove} onChange={(v) => set("maxMove", v)} />
+          <PointStepper label="Max Drawdown Points" value={form.maxDrawdown} onChange={(v) => set("maxDrawdown", v)} />
           <Field label="Profit / Loss $" value={form.profitLoss} onChange={(v) => set("profitLoss", v)} />
           <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Discount Points" value={form.discountPoints || ""} onChange={(v) => set("discountPoints", v)} />
-            <Field label="Max Discount Points" value={form.maxDiscountPoints || ""} onChange={(v) => set("maxDiscountPoints", v)} />
+            <PointStepper label="Discount Points" value={form.discountPoints || ""} onChange={(v) => set("discountPoints", v)} />
+            <PointStepper label="Max Discount Points" value={form.maxDiscountPoints || ""} onChange={(v) => set("maxDiscountPoints", v)} />
           </div>
           <label>
             <span className="mb-2 block text-sm text-zinc-300">Notes</span>
