@@ -721,6 +721,8 @@ useEffect(() => {
       const next = { ...prev };
       journal.forEach((item) => {
         if (isOpenOrder(item)) return;
+        if (String(item.orderStatus || "").toLowerCase().includes("filled")) return;
+        if (item.filledLocked) return;
         const direction = String(item.direction || "BOTH").toUpperCase();
         const price = parsePrice(item.entry || item.entry_price);
         if (price === null) return;
@@ -1608,6 +1610,39 @@ useEffect(() => {
   }, [aiSignals]);
 
   const latestKnownMarketPrice = latestMarketSnapshot?.price ?? null;
+  const nearbyTapOrderWindowPoints = 50;
+  const tapPriorityDistance = (anchor) => {
+    const levelPrice = parsePrice(anchor?.entry || anchor?.price);
+    if (levelPrice === null) return anchor?.boardDistance ?? anchor?.triggerDistance ?? anchor?.marketDistance ?? Number.POSITIVE_INFINITY;
+    if (latestKnownMarketPrice === null) return anchor?.boardDistance ?? anchor?.triggerDistance ?? anchor?.marketDistance ?? Number.POSITIVE_INFINITY;
+
+    const direction = String(anchor?.direction || "Both").toLowerCase();
+    if (direction.includes("short")) return levelPrice >= latestKnownMarketPrice ? levelPrice - latestKnownMarketPrice : 0;
+    if (direction.includes("long")) return levelPrice <= latestKnownMarketPrice ? latestKnownMarketPrice - levelPrice : 0;
+    return Math.abs(levelPrice - latestKnownMarketPrice);
+  };
+  const compareBoardPriority = (a, b) => {
+    const aInRange = a.boardDistance === null || a.boardDistance === undefined || a.boardDistance <= maxOrderCardDistancePoints;
+    const bInRange = b.boardDistance === null || b.boardDistance === undefined || b.boardDistance <= maxOrderCardDistancePoints;
+    if (aInRange !== bInRange) return bInRange - aInRange;
+
+    const aTapDistance = tapPriorityDistance(a);
+    const bTapDistance = tapPriorityDistance(b);
+    const sameDirection = String(a.direction || "").toLowerCase() === String(b.direction || "").toLowerCase() || a.direction === "Both" || b.direction === "Both";
+    const aPrice = parsePrice(a.entry || a.price);
+    const bPrice = parsePrice(b.entry || b.price);
+    const nearbyPriceLadder = aPrice !== null && bPrice !== null && Math.abs(aPrice - bPrice) <= nearbyTapOrderWindowPoints;
+    const nearbyTapLadder = Math.abs(aTapDistance - bTapDistance) <= nearbyTapOrderWindowPoints;
+
+    if (sameDirection && (nearbyPriceLadder || nearbyTapLadder) && aTapDistance !== bTapDistance) {
+      return aTapDistance - bTapDistance;
+    }
+
+    return Number(b.score || 0) - Number(a.score || 0)
+      || Number(b.precisionScore || 0) - Number(a.precisionScore || 0)
+      || aTapDistance - bTapDistance
+      || ((aPrice ?? Number.POSITIVE_INFINITY) - (bPrice ?? Number.POSITIVE_INFINITY));
+  };
 
   const rankedAiLimitZones = useMemo(() => {
     const rawEvidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
@@ -1745,12 +1780,7 @@ useEffect(() => {
       !zone.hasOnlyManualPillars
     ));
 
-    const ordered = [...scored].sort((a, b) => {
-      const aInRange = a.boardDistance === null || a.boardDistance <= maxOrderCardDistancePoints;
-      const bInRange = b.boardDistance === null || b.boardDistance <= maxOrderCardDistancePoints;
-      if (aInRange !== bInRange) return bInRange - aInRange;
-      return b.score - a.score || b.precisionScore - a.precisionScore || (a.boardDistance ?? Infinity) - (b.boardDistance ?? Infinity);
-    });
+    const ordered = [...scored].sort(compareBoardPriority);
 
     const selected = [];
     const directionCounts = { Long: 0, Short: 0, Both: 0 };
@@ -3288,7 +3318,6 @@ const exportJournalCSV = () => {
     .map((record) => record?.anchorSnapshot)
     .filter(Boolean)
     .filter((anchor) => !isManualOrder(anchor))
-    .filter((anchor) => !submittedRecordForAnchor(anchor))
     .filter((anchor) => !pulledRecordForAnchor(anchor));
 
   const pulledAnchors = Object.values(pulledAnchorKeys)
@@ -3468,14 +3497,13 @@ const exportJournalCSV = () => {
         best.set(key, anchor);
       }
     });
-    return Array.from(best.values()).sort((a, b) => (Number(b.score || 0) - Number(a.score || 0)) || ((Number(a.entry || a.price) || 0) - (Number(b.entry || b.price) || 0)));
-  }, [rawActiveAnchors]);
+    return Array.from(best.values()).sort(compareBoardPriority);
+  }, [rawActiveAnchors, latestKnownMarketPrice]);
   const aiAnchorsOnly = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
   const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
   const intermediateWatchlist = aiAnchorsOnly.filter((anchor) => ["B+", "B"].includes(anchor.grade));
   const watchLevels = aiAnchorsOnly.filter((anchor) => anchor.grade === "C");
   const filledManagingLevels = filledPinnedAnchors
-    .filter((anchor) => !submittedRecordForAnchor(anchor))
     .sort((a, b) => new Date(b.filledAt || b.updatedAt || b.date || 0).getTime() - new Date(a.filledAt || a.updatedAt || a.date || 0).getTime());
 
   useEffect(() => {
@@ -3802,7 +3830,7 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {(activeAnchors.length > 0 || filledManagingLevels.length > 0 || outOfRangeAiAnchors.length > 0 || pulledAnchors.length > 0) && (
+        {tab === "trade" && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -4667,13 +4695,19 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
 }
 
 function LevelSection({ title, subtitle, items = [], selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor, onRestoreAnchor, onDeletePulledAnchor, mode = "active" }) {
-  if (!items.length) return null;
+  const alwaysShow = mode === "filled";
+  if (!items.length && !alwaysShow) return null;
   return (
     <div className="mt-5">
       <div className="mb-3">
         <div className="text-lg font-black text-white">{title}</div>
         {subtitle && <div className="text-sm text-zinc-500">{subtitle}</div>}
       </div>
+      {!items.length && alwaysShow && (
+        <div className="rounded-2xl border border-zinc-800 bg-[#090909] p-4 text-sm text-zinc-500">
+          No filled cards are being managed right now.
+        </div>
+      )}
       <div className="grid gap-3 md:grid-cols-3">
         {items.map((anchor) => (
           <LevelCard key={anchor.id} anchor={anchor} selectedTrade={selectedTrade} onSelect={onSelect} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={onVerify} onUnverify={onUnverify} onSubmitAnchor={onSubmitAnchor} filledAnchorKeys={filledAnchorKeys} onMarkFilled={onMarkFilled} onDismissAnchor={onDismissAnchor} onRestoreAnchor={onRestoreAnchor} onDeletePulledAnchor={onDeletePulledAnchor} mode={mode} />
