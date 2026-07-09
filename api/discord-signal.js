@@ -7,6 +7,8 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const discordWebhookUrl = process.env.DISCORD_PLAYMAKER_SIGNALS_WEBHOOK_URL;
 const crownIconUrl = process.env.DISCORD_PLAYMAKER_CROWN_ICON_URL;
+const sentDiscordEvents = globalThis.__playmakerDiscordEvents || new Map();
+globalThis.__playmakerDiscordEvents = sentDiscordEvents;
 
 const isOwnerUser = (user) => {
   const text = String(user?.email || user?.id || "").toLowerCase();
@@ -21,9 +23,37 @@ const isManualAnchor = ({ event = "", title = "", detail = "", anchor = {} } = {
   return !isAiSignal && (sourceType.includes("manual") || signalName.includes("manual") || text.includes("manual order") || text.includes("manual scan"));
 };
 
+const normalizePrice = (value) => {
+  const parsed = Number(String(value ?? "").replace(/,/g, ""));
+  return Number.isFinite(parsed) ? String(Math.round(parsed * 4) / 4) : "NA";
+};
+
+const discordEventKey = ({ event = "UPDATE", title = "", detail = "", anchor = {} } = {}) => {
+  const direction = String(anchor.direction || anchor.rawSignal?.direction || "BOTH").toUpperCase();
+  const entry = normalizePrice(anchor.entry || anchor.price || anchor.rawSignal?.entry || anchor.rawSignal?.price);
+  const grade = String(anchor.grade || anchor.rawSignal?.ai_grade || "");
+  const sources = String(anchor.sourceCount || anchor.evidence?.length || anchor.rawSignal?.evidence?.length || "");
+  const signature = String(anchor.signature || anchor.evidenceSignature || anchor.rawSignal?.id || anchor.id || "").slice(0, 80);
+  return [event, direction, entry, grade, sources, signature].map((part) => String(part || "").trim()).join("|");
+};
+
+const shouldSkipDuplicate = (payload) => {
+  const now = Date.now();
+  const cutoff = now - 30 * 60 * 1000;
+  for (const [key, sentAt] of sentDiscordEvents.entries()) {
+    if (sentAt < cutoff) sentDiscordEvents.delete(key);
+  }
+
+  const key = discordEventKey(payload);
+  if (sentDiscordEvents.has(key)) return true;
+  sentDiscordEvents.set(key, now);
+  return false;
+};
+
 const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", detail = "", anchor = {} }) => {
   if (!discordWebhookUrl) return { skipped: true };
   if (isManualAnchor({ event, title, detail, anchor })) return { skipped: true, reason: "Manual order notices are local only" };
+  if (shouldSkipDuplicate({ event, title, detail, anchor })) return { skipped: true, reason: "Duplicate notice skipped" };
 
   const direction = String(anchor.direction || anchor.rawSignal?.direction || "").toUpperCase();
   const entry = anchor.entry || anchor.price || anchor.rawSignal?.entry || anchor.rawSignal?.price || "";

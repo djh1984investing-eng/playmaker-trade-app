@@ -1,18 +1,47 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
-import { trackBuyAccessClick } from "./lib/googleTracking";
+import { trackBuyAccessClick, trackHomeClick } from "./lib/googleTracking";
+import {
+  arrayFromMaybe,
+  buildStopPlansForCluster,
+  clamp,
+  clusterPrecisionFromWidth,
+  clusterStatusFromWidth,
+  craterQualityScore,
+  deviationAbsFromLabel,
+  deviationEvidenceScore,
+  dirSide,
+  findBestEntryStack,
+  firstDefined,
+  fmt,
+  fmtPrice,
+  getLevelKey,
+  getNestedLevelValue,
+  getSignalPayload,
+  grade,
+  isGenericPriceAlertSignal,
+  isYes,
+  levelMergeTolerance,
+  maxConfluenceDistancePoints,
+  maxOrderCardDistancePoints,
+  n,
+  normalizeRetrace,
+  normalizeSTDV,
+  normalizeStatus,
+  objectFromMaybeJson,
+  parsePrice,
+  parseYesNo,
+  roundToTick,
+  scoreDistance,
+  structureEvidenceScore,
+  timeframeFromPayload,
+  uniqueEvidenceByPriceAndLabel,
+  uniqueSortedPrices
+} from "./lib/playmakerConfluence";
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
-const maxConfluenceDistancePoints = 15;
-const maxOrderCardDistancePoints = 2000;
 const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
-const TICK_SIZE = 0.25;
-const roundToTick = (price) => {
-  const parsed = Number(price);
-  if (!Number.isFinite(parsed)) return price;
-  return Math.round(parsed / TICK_SIZE) * TICK_SIZE;
-};
 const OWNER_EMAILS = ["djh1984investing@gmail.com", "djharrison", "durrell", "djh1984investing-eng"];
 const isOwnerUser = (user) => {
   const text = String(user?.email || user?.id || "").toLowerCase();
@@ -118,24 +147,6 @@ const stdvChoices = ["0", "0.5", "0.705", "1", "1.5", "2", "2.25", "2.5", "3", "
 const retraceChoices = ["None", "0.50", "0.618", "0.705", "0.786"];
 const tfChoices = ["5m", "15m", "1H", "4H"];
 
-const n = (v, f = 0) => {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : f;
-};
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const isYes = (v) => v === "Yes";
-const fmt = (v) => Number(v).toFixed(2);
-const parsePrice = (value) => {
-  const cleaned = String(value ?? "").replace(/,/g, "").trim();
-  if (!cleaned) return null;
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
-};
-const fmtPrice = (value) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--";
-};
-
 const formatEastern = (value) => {
   if (!value) return "--";
   const d = new Date(value);
@@ -151,108 +162,6 @@ const formatEastern = (value) => {
     timeZoneName: "short"
   });
 };
-
-const arrayFromMaybe = (value) => {
-  if (Array.isArray(value)) return value;
-  if (value === undefined || value === null || value === "") return [];
-  if (typeof value === "string") {
-    const txt = value.trim();
-    if (!txt) return [];
-    try {
-      const parsed = JSON.parse(txt);
-      if (Array.isArray(parsed)) return parsed;
-    } catch (_err) {}
-    return txt.split(",").map((part) => part.trim()).filter(Boolean);
-  }
-  return [value];
-};
-
-const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
-
-const objectFromMaybeJson = (value) => {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value;
-  if (typeof value !== "string") return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch (_err) {
-    return {};
-  }
-};
-
-const levelKeyFromName = (name) => {
-  const text = String(name ?? "").trim();
-  if (!text) return "";
-  if (["ce", "mid", "mean", "0", "0.0", "0.00"].includes(text.toLowerCase())) return "ce";
-  const sign = text.startsWith("-") ? "neg" : "pos";
-  const clean = text.replace("+", "").replace("-", "").replace(".", "_").replace(/[^0-9_]/g, "");
-  return clean ? `${sign}_${clean}` : "";
-};
-
-const getNestedLevelValue = (payload, label) => {
-  const levels = payload?.levels && typeof payload.levels === "object" ? payload.levels : {};
-  const key = levelKeyFromName(label);
-  const text = String(label);
-  const numeric = text.replace("+", "").replace("-", "");
-  const sign = text.startsWith("-") ? "neg" : "pos";
-  const alt = numeric.replace(".", "_");
-  return firstDefined(
-    payload?.[key], levels?.[key],
-    payload?.[`stdv_${key}`], levels?.[`stdv_${key}`],
-    payload?.[`session_${key}`], levels?.[`session_${key}`],
-    payload?.[`ext_${key}`], levels?.[`ext_${key}`],
-    payload?.[`ext_${sign}_${alt}`], levels?.[`ext_${sign}_${alt}`],
-    payload?.[`fib_${alt}`], levels?.[`fib_${alt}`],
-    payload?.[`ote_${alt}`], levels?.[`ote_${alt}`],
-    payload?.[`plus_${alt}`], levels?.[`plus_${alt}`],
-    payload?.[`minus_${alt}`], levels?.[`minus_${alt}`],
-    payload?.[text], levels?.[text]
-  );
-};
-
-
-const isGenericPriceAlertSignal = (signal) => {
-  const payload = { ...objectFromMaybeJson(signal?.payload), ...objectFromMaybeJson(signal?.raw_json), ...objectFromMaybeJson(signal?.raw), ...signal };
-  const text = String(firstDefined(payload.signal, payload.setup, payload.source, payload.alert_name, signal?.signal, "") || "").toUpperCase();
-  const structured = ["CONFLUENCE", "SESSION_DEVIATION", "VOLUME_PROFILE", "ORDER_BLOCK", "REJECTION_BLOCK", "RETRACE", "RETRACEMENT", "EXTENSION", "PLAYMAKER"].some((token) => text.includes(token));
-  return !structured && (text.includes("PRICE_ALERT") || text.includes("PRICE ALERT") || text === "ALERT" || text === "ALERT()" || text.includes("CROSSING"));
-};
-
-const uniqueEvidenceByPriceAndLabel = (items) => {
-  const seen = new Set();
-  return items.filter((item) => {
-    const price = parsePrice(item?.price);
-    if (price === null) return false;
-    const key = `${item.sourceType}|${item.label}|${Math.round(price * 4) / 4}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
-
-const parseYesNo = (value) => {
-  const text = String(value ?? "").trim().toLowerCase();
-  if (["yes", "true", "1", "y", "on", "bullish", "long", "buy"].includes(text)) return "Yes";
-  if (["no", "false", "0", "n", "off", "bearish", "short", "sell"].includes(text)) return "No";
-  return null;
-};
-
-const normalizeRetrace = (value) => {
-  const parsed = parsePrice(value);
-  if (parsed === null) return "None";
-  const abs = Math.abs(parsed);
-  const choices = [0.5, 0.618, 0.705, 0.786];
-  const closest = choices.reduce((best, cur) => Math.abs(cur - abs) < Math.abs(best - abs) ? cur : best, choices[0]);
-  return closest === 0.5 ? "0.50" : String(closest);
-};
-
-const normalizeSTDV = (value) => {
-  const parsed = parsePrice(value);
-  if (parsed === null) return "0";
-  return String(parsed);
-};
-
-const normalizeStatus = (value) => String(value ?? "").trim().toLowerCase();
 
 const isOpenOrder = (item) => {
   const result = normalizeStatus(item?.result);
@@ -275,6 +184,35 @@ const isManualOrder = (item) => {
   const eventText = String(item?.event || item?.title || item?.detail || item?.notes || "").toLowerCase();
   const isAiSignal = sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
   return !isAiSignal && (sourceType.includes("manual") || signalName.includes("manual") || eventText.includes("manual order") || eventText.includes("manual scan"));
+};
+
+const loadStoredNoticeKeys = () => {
+  try {
+    if (typeof window === "undefined") return {};
+    const saved = JSON.parse(window.localStorage.getItem("playmakerNoticeKeys") || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+    return saved;
+  } catch (_err) {
+    return {};
+  }
+};
+
+const saveStoredNoticeKeys = (keys) => {
+  try {
+    if (typeof window === "undefined") return;
+    const entries = Object.entries(keys || {}).slice(-300);
+    window.localStorage.setItem("playmakerNoticeKeys", JSON.stringify(Object.fromEntries(entries)));
+  } catch (_err) {}
+};
+
+const discordNoticeKey = ({ event = "UPDATE", title = "", detail = "", anchor = null } = {}) => {
+  const price = parsePrice(anchor?.entry || anchor?.price || anchor?.rawSignal?.entry || anchor?.rawSignal?.price);
+  const direction = String(anchor?.direction || anchor?.rawSignal?.direction || "BOTH").toUpperCase();
+  const grade = String(anchor?.grade || anchor?.rawSignal?.ai_grade || "");
+  const sources = String(anchor?.sourceCount || anchor?.evidence?.length || anchor?.rawSignal?.evidence?.length || "");
+  const signature = String(anchor?.signature || anchor?.evidenceSignature || anchor?.rawSignal?.id || anchor?.id || "").slice(0, 80);
+  const normalizedPrice = price === null ? "NA" : String(Math.round(price * 4) / 4);
+  return [event, direction, normalizedPrice, grade, sources, signature].map((part) => String(part || "").trim()).join("|");
 };
 
 const sameTradeAnchor = (a, b) => {
@@ -345,20 +283,6 @@ function lvnWidthMult(width) {
   if (w > 0) return 0.7;
   return 0;
 }
-
-function grade(score) {
-  if (score >= 92) return ["A+", "Elite Setup"];
-  if (score >= 84) return ["A", "High Probability"];
-  if (score >= 74) return ["B+", "Strong Setup"];
-  if (score >= 65) return ["B", "Tradable Setup"];
-  if (score >= 55) return ["C", "Needs Confirmation"];
-  return ["D", "Wait / Low Quality"];
-}
-
-function dirSide(direction) {
-  return direction === "Long" ? -1 : 1;
-}
-
 
 const getDefaultForm = () => ({
     tradeEntryPrice: "21450",
@@ -517,14 +441,23 @@ useEffect(() => {
   const [manualScannerResult, setManualScannerResult] = useState(null);
   const [verifiedAnchors, setVerifiedAnchors] = useState({});
   const [notificationLog, setNotificationLog] = useState([]);
-  const [seenNotificationKeys, setSeenNotificationKeys] = useState({});
+  const [seenNotificationKeys, setSeenNotificationKeys] = useState(() => loadStoredNoticeKeys());
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
   const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [pulledAnchorKeys, setPulledAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
-  const previousAnchorMapRef = useRef(new Map());
+  const previousAnchorMapRef = useRef(null);
+  const sentDiscordNoticeKeysRef = useRef(new Set(Object.keys(seenNotificationKeys)));
   const notificationAudioRef = useRef(null);
+
+  useEffect(() => {
+    sentDiscordNoticeKeysRef.current = new Set([
+      ...Array.from(sentDiscordNoticeKeysRef.current || []),
+      ...Object.keys(seenNotificationKeys || {})
+    ]);
+    saveStoredNoticeKeys(seenNotificationKeys);
+  }, [seenNotificationKeys]);
 
   const requestDesktopNotifications = async () => {
     if (typeof window === "undefined") return;
@@ -592,6 +525,11 @@ useEffect(() => {
   const sendDiscordBoardNotice = async ({ event, title = "Playmaker Signal", detail = "", anchor = null }) => {
     if (!ownerMode || !user) return;
     if (!anchor || isManualAnchor(anchor)) return;
+
+    const dedupeKey = `DISCORD|${discordNoticeKey({ event, title, detail, anchor })}`;
+    if (sentDiscordNoticeKeysRef.current.has(dedupeKey) || seenNotificationKeys[dedupeKey]) return;
+    sentDiscordNoticeKeysRef.current.add(dedupeKey);
+    setSeenNotificationKeys((prev) => ({ ...prev, [dedupeKey]: true }));
 
     try {
       const { data } = await supabase.auth.getSession();
@@ -1256,13 +1194,6 @@ useEffect(() => {
   const scannerAiSignals = aiSignals.filter((signal) => !isGenericPriceAlertSignal(signal));
 
 
-  const getSignalPayload = (signal) => ({
-    ...objectFromMaybeJson(signal?.payload),
-    ...objectFromMaybeJson(signal?.raw_json),
-    ...objectFromMaybeJson(signal?.raw),
-    ...signal
-  });
-
   const normalizeDirection = (value, fallbackSignal = "") => {
     const direct = String(value || "").trim().toLowerCase();
     if (["both", "neutral", "level", "levels"].includes(direct)) return "Both";
@@ -1317,14 +1248,6 @@ useEffect(() => {
 
   const sessionRankLimit = 5;
 
-  const scoreDistance = (distance, tight, medium, wide) => {
-    if (!Number.isFinite(distance)) return 0;
-    if (distance <= tight) return 1;
-    if (distance <= medium) return 0.72;
-    if (distance <= wide) return 0.42;
-    return 0;
-  };
-
   const nearestWeeklyToPrice = (price) => {
     const entry = parsePrice(price);
     if (entry === null || weeklyLevels.length === 0) return null;
@@ -1366,180 +1289,6 @@ useEffect(() => {
       })
       .filter((crater) => crater && crater.distance <= maxConfluenceDistancePoints)
       .sort((a, b) => a.distance - b.distance)[0] || null;
-  };
-
-  // Cluster tolerance: levels within 15 points are treated as one tradable zone.
-  // Anything farther away is not counted or noted as confluence.
-  const levelMergeTolerance = 15;
-
-  const getLevelKey = (price) => {
-    const parsed = parsePrice(price);
-    if (parsed === null) return "na";
-    return String(Math.round(parsed / 5) * 5);
-  };
-
-
-  const uniqueSortedPrices = (items) => {
-    const seen = new Set();
-    return items
-      .map((item) => parsePrice(item.price))
-      .filter((price) => price !== null && price > 0)
-      .sort((a, b) => a - b)
-      .filter((price) => {
-        const key = String(Math.round(price * 4) / 4);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-  };
-
-  const clusterPrecisionFromWidth = (width) => {
-    const w = Math.abs(n(width));
-    if (w <= 5) return 100;
-    if (w <= 10) return 90;
-    if (w <= 15) return 80;
-    if (w <= 20) return 70;
-    if (w <= 30) return 55;
-    return 40;
-  };
-
-  const clusterStatusFromWidth = (width) => {
-    const w = Math.abs(n(width));
-    if (w <= 5) return "PINPOINT LIMIT CLUSTER";
-    if (w <= 10) return "TIGHT LIMIT CLUSTER";
-    if (w <= 20) return "TRADABLE LIMIT CLUSTER";
-    if (w <= 30) return "WIDE WATCHLIST CLUSTER";
-    return "TOO WIDE / SPLIT ZONE";
-  };
-
-  const entryCenterWeight = (item) => {
-    const source = String(item?.sourceType || "");
-    const label = String(item?.label || "");
-    if (source.includes("POC")) return 10;
-    if (source.includes("LVN") || source.includes("Crater")) return 9;
-    if (source.includes("OTE") || label.includes("0.618") || label.includes("0.705") || label.includes("0.786")) return 8;
-    if (label.includes("CE") || source.includes("Order Block") || source.includes("Rejection Block")) return 7;
-    if (source.includes("PlayMaker")) return 6;
-    if (source.includes("STDV") || source.includes("Deviation")) return 4;
-    if (source.includes("Weekly")) return 3;
-    return 2;
-  };
-
-  const findBestEntryStack = (evidence = [], fallbackCenter = 0) => {
-    const usable = evidence
-      .map((item) => ({ ...item, price: parsePrice(item.price), weight: entryCenterWeight(item) + Math.min(8, n(item.evidenceScore ?? item.score) / 8) }))
-      .filter((item) => item.price !== null && item.price > 0);
-
-    if (!usable.length) {
-      return { center: fallbackCenter, low: fallbackCenter, high: fallbackCenter, width: 0, count: 0, labels: [] };
-    }
-
-    let best = null;
-    usable.forEach((anchor) => {
-      const stack = usable.filter((item) => Math.abs(item.price - anchor.price) <= 6);
-      const score = stack.reduce((sum, item) => sum + item.weight, 0) + stack.length * 2;
-      if (!best || score > best.score || (score === best.score && stack.length > best.stack.length)) {
-        best = { stack, score };
-      }
-    });
-
-    const stack = best?.stack?.length ? best.stack : usable;
-    const totalWeight = stack.reduce((sum, item) => sum + item.weight, 0) || 1;
-    const center = stack.reduce((sum, item) => sum + item.price * item.weight, 0) / totalWeight;
-    const prices = stack.map((item) => item.price).sort((a, b) => a - b);
-
-    return {
-      center,
-      low: prices[0],
-      high: prices[prices.length - 1],
-      width: Math.max(0, prices[prices.length - 1] - prices[0]),
-      count: stack.length,
-      labels: stack.slice(0, 6).map((item) => item.label || item.sourceType)
-    };
-  };
-
-  const buildStopPlansForCluster = (direction, low, high, zoneCenter, stackCenter, precisionLow, precisionHigh) => {
-    const zoneWidth = Math.max(0, high - low);
-    const precisionWidth = Math.max(0, (precisionHigh ?? stackCenter) - (precisionLow ?? stackCenter));
-    const buffer = 2;
-    const dir = String(direction || "").toLowerCase();
-    const isShort = dir.includes("short");
-    const entryCore = Number.isFinite(stackCenter) ? stackCenter : zoneCenter;
-    const protectiveEntry = isShort ? Math.max(entryCore, zoneCenter) : Math.min(entryCore, zoneCenter);
-
-    return [7, 10, 15].map((stop) => {
-      const needed = precisionWidth / 2 + buffer;
-      const valid = stop >= needed;
-      const rawLimit = stop <= 7
-        ? entryCore
-        : stop <= 10
-          ? (entryCore * 0.75 + zoneCenter * 0.25)
-          : protectiveEntry;
-      const limit = roundToTick(rawLimit);
-      const stopArea = roundToTick(isShort ? limit + stop : limit - stop);
-      return {
-        stop,
-        limit,
-        stopArea,
-        valid,
-        neededStop: needed,
-        confidence: valid ? (stop <= 7 ? "Pinpoint stack" : stop <= 10 ? "Balanced stack" : "Protected stack") : "Too Tight",
-        note: valid
-          ? `Entry centered from strongest confluence stack, not full zone. Stack width ${fmt(precisionWidth)} pts / full zone ${fmt(zoneWidth)} pts.`
-          : `This stop is tight for the strongest stack. Stack needs about ${fmt(needed)} pts before buffer.`
-      };
-    });
-  };
-
-  const deviationAbsFromLabel = (label) => {
-    const match = String(label || "").match(/[-+]?\d+(?:\.\d+)?/);
-    return match ? Math.abs(Number(match[0])) : 0;
-  };
-
-  const deviationEvidenceScore = (label) => {
-    const value = deviationAbsFromLabel(label);
-    if (value >= 6) return 52;
-    if (value >= 5.5) return 48;
-    if (value >= 5) return 44;
-    if (value >= 4.5) return 40;
-    if (value >= 4) return 36;
-    if (value >= 3.5) return 31;
-    if (value >= 3) return 26;
-    if (value >= 2.5) return 16;
-    if (value >= 2) return 12;
-    if (value >= 1.5) return 9;
-    if (value >= 1) return 6;
-    if (value >= 0.705) return 4;
-    if (value >= 0.5) return 3;
-    return 0;
-  };
-
-  const timeframeFromPayload = (payload, fallback = "") => {
-    const raw = String(firstDefined(payload.timeframe, payload.interval, payload.tf, fallback) || "").toUpperCase();
-    if (raw === "D" || raw.includes("DAILY") || raw.includes("1D")) return "D";
-    if (raw.includes("240") || raw.includes("4H")) return "4H";
-    if (raw.includes("60") || raw.includes("1H")) return "1H";
-    if (raw.includes("15")) return "15m";
-    if (raw.includes("5")) return "5m";
-    return "";
-  };
-
-  const structureEvidenceScore = (payload, fallback, type) => {
-    const tf = timeframeFromPayload(payload, fallback);
-    const isRB = String(type || "").toUpperCase().includes("REJECTION");
-    if (tf === "4H") return isRB ? 18 : 20;
-    if (tf === "1H") return isRB ? 13 : 15;
-    if (tf === "15m") return isRB ? 5 : 6;
-    if (tf === "5m") return 0;
-    return isRB ? 8 : 9;
-  };
-
-  const craterQualityScore = (crater) => {
-    if (!crater) return 0;
-    const width = n(crater.width);
-    const widthScore = width >= 120 ? 28 : width >= 80 ? 24 : width >= 50 ? 18 : width >= 25 ? 12 : 7;
-    const locationScore = crater.inside ? 18 : 16 * scoreDistance(crater.distance, 3, 7, 15);
-    return widthScore + locationScore;
   };
 
   const buildLevelEvidenceCandidates = (signal) => {
@@ -1773,6 +1522,41 @@ useEffect(() => {
     return uniqueEvidenceByPriceAndLabel(candidates);
   };
 
+  const latestMarketSnapshot = useMemo(() => {
+    for (const signal of aiSignals) {
+      const payload = getSignalPayload(signal);
+      const directPrice = parsePrice(firstDefined(
+        payload.current_price,
+        payload.close,
+        payload.last
+      ));
+      if (directPrice !== null) {
+        const createdMs = new Date(signal.created_at || payload.created_at || Date.now()).getTime();
+        const ageMinutes = Number.isFinite(createdMs) ? (Date.now() - createdMs) / 60000 : null;
+        return {
+          price: directPrice,
+          ageMinutes,
+          source: "market"
+        };
+      }
+
+      const sessionHigh = parsePrice(firstDefined(payload.session_high, payload.high, payload.range_high));
+      const sessionLow = parsePrice(firstDefined(payload.session_low, payload.low, payload.range_low));
+      if (sessionHigh !== null && sessionLow !== null) {
+        const createdMs = new Date(signal.created_at || payload.created_at || Date.now()).getTime();
+        const ageMinutes = Number.isFinite(createdMs) ? (Date.now() - createdMs) / 60000 : null;
+        return {
+          price: roundToTick((sessionHigh + sessionLow) / 2),
+          ageMinutes,
+          source: "session"
+        };
+      }
+    }
+    return null;
+  }, [aiSignals]);
+
+  const latestKnownMarketPrice = latestMarketSnapshot?.price ?? null;
+
   const rankedAiLimitZones = useMemo(() => {
     const rawEvidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
     const seedLevels = [
@@ -1866,6 +1650,9 @@ useEffect(() => {
       const clusterCenter = roundToTick(entryStack.center);
       const triggerDistances = triggerPrices.map((price) => Math.abs(price - clusterCenter));
       const nearestTriggerDistance = triggerDistances.length ? Math.min(...triggerDistances) : null;
+      const marketDistance = latestKnownMarketPrice !== null ? Math.abs(clusterCenter - latestKnownMarketPrice) : null;
+      const boardDistance = nearestTriggerDistance ?? marketDistance;
+      const boardDistanceMode = nearestTriggerDistance !== null ? "alert" : "market";
       const tight5Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 2.5).length;
       const tight10Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 5).length;
       const tight20Count = clusterPrices.filter((price) => Math.abs(price - clusterCenter) <= 10).length;
@@ -1891,34 +1678,50 @@ useEffect(() => {
         hasDailyStdv ? "Daily level is treated as a reaction zone; precision still comes from nearby 1H/4H/5m/15m sources." : null,
         `Cluster ${fmt(clusterLow)}–${fmt(clusterHigh)} / width ${fmt(clusterWidth)} pts`,
         `${tight5Count} within 5 • ${tight10Count} within 10 • ${tight20Count} within 20`,
-        nearestTriggerDistance !== null ? `Current price ${fmt(nearestTriggerDistance)} pts away (status only)` : "Limit can be far from current price"
+        boardDistanceMode === "alert" && nearestTriggerDistance !== null ? `Alert price ${fmt(nearestTriggerDistance)} pts away (old reading mode)` : (
+          marketDistance !== null ? `Latest known price ${fmtPrice(latestKnownMarketPrice)} / ${fmt(marketDistance)} pts away` : "Limit can be far from current price"
+        )
       ].filter(Boolean);
       const sortedEvidence = [...zone.evidence].sort((a, b) => n(b.evidenceScore) - n(a.evidenceScore));
       const createdTimes = sortedEvidence.map((item) => item.created_at).filter(Boolean).map((value) => new Date(value).getTime()).filter(Number.isFinite);
       const createdAt = createdTimes.length ? new Date(Math.min(...createdTimes)).toISOString() : zone.created_at;
       const updatedAt = createdTimes.length ? new Date(Math.max(...createdTimes)).toISOString() : zone.created_at;
-      return { ...zone, precisionOnly, hasOnlyManualPillars, id: `level-${Math.round(clusterCenter)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} cluster ${fmtPrice(clusterCenter)}`, sourceType: "Persistent Level Stack", price: clusterCenter, clusterCenter, clusterLow, clusterHigh, clusterWidth, clusterPrices, tight5Count, tight10Count, tight20Count, stopPlans, score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, weekly, crater, reasons, evidence: sortedEvidence, sourceCount, created_at: createdAt, updated_at: updatedAt, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked cluster ${fmtPrice(clusterCenter)}`, payload: { price: clusterCenter, cluster_center: clusterCenter, zone_center: zoneCenter, entry_stack_center: clusterCenter, entry_stack_low: entryStack.low, entry_stack_high: entryStack.high, entry_stack_width: entryStack.width, entry_stack_count: entryStack.count, entry_stack_labels: entryStack.labels, cluster_low: clusterLow, cluster_high: clusterHigh, cluster_width: clusterWidth, stop_plans: stopPlans, direction: zone.direction, zone_score: score, precision_score: precisionScore, evidence: sortedEvidence.map((item) => ({ label: item.label, price: item.price, sourceType: item.sourceType, score: item.evidenceScore, created_at: item.created_at })) } };
+      return { ...zone, precisionOnly, hasOnlyManualPillars, id: `level-${Math.round(clusterCenter)}-${zone.direction}`, label: `${zone.direction === "Both" ? "Long/Short" : zone.direction} cluster ${fmtPrice(clusterCenter)}`, sourceType: "Persistent Level Stack", price: clusterCenter, clusterCenter, clusterLow, clusterHigh, clusterWidth, clusterPrices, tight5Count, tight10Count, tight20Count, stopPlans, score, zoneScore: score, precisionScore, grade: zoneGrade, status, triggerDistance: nearestTriggerDistance, marketDistance, boardDistance, boardDistanceMode, latestKnownMarketPrice, weekly, crater, reasons, evidence: sortedEvidence, sourceCount, created_at: createdAt, updated_at: updatedAt, sourceId: Array.from(zone.sourceIds).join("|") || zone.sourceId, session: Array.from(zone.sessions).join(",") || "GLOBAL", signalName: `Stacked cluster ${fmtPrice(clusterCenter)}`, payload: { price: clusterCenter, cluster_center: clusterCenter, zone_center: zoneCenter, entry_stack_center: clusterCenter, entry_stack_low: entryStack.low, entry_stack_high: entryStack.high, entry_stack_width: entryStack.width, entry_stack_count: entryStack.count, entry_stack_labels: entryStack.labels, cluster_low: clusterLow, cluster_high: clusterHigh, cluster_width: clusterWidth, stop_plans: stopPlans, direction: zone.direction, zone_score: score, precision_score: precisionScore, market_distance: marketDistance, board_distance: boardDistance, board_distance_mode: boardDistanceMode, latest_known_price: latestKnownMarketPrice, evidence: sortedEvidence.map((item) => ({ label: item.label, price: item.price, sourceType: item.sourceType, score: item.evidenceScore, created_at: item.created_at })) } };
     }).filter((zone) => (
       zone.score >= 55 &&
       !zone.precisionOnly &&
-      !zone.hasOnlyManualPillars &&
-      (zone.triggerDistance === null || zone.triggerDistance <= maxOrderCardDistancePoints)
-    )).sort((a, b) => b.score - a.score || b.precisionScore - a.precisionScore);
+      !zone.hasOnlyManualPillars
+    ));
+
+    const ordered = [...scored].sort((a, b) => {
+      const aInRange = a.boardDistance === null || a.boardDistance <= maxOrderCardDistancePoints;
+      const bInRange = b.boardDistance === null || b.boardDistance <= maxOrderCardDistancePoints;
+      if (aInRange !== bInRange) return bInRange - aInRange;
+      return b.score - a.score || b.precisionScore - a.precisionScore || (a.boardDistance ?? Infinity) - (b.boardDistance ?? Infinity);
+    });
 
     const selected = [];
     const directionCounts = { Long: 0, Short: 0, Both: 0 };
-    for (const zone of scored) {
+    const baseBoardCardCap = 12;
+    const maxBoardCardCap = 16;
+    const baseDirectionCap = 5;
+    const overflowDirectionCap = 7;
+    for (const zone of ordered) {
       const duplicate = selected.some((item) => Math.abs(item.price - zone.price) <= levelMergeTolerance && (item.direction === zone.direction || item.direction === "Both" || zone.direction === "Both"));
       const dir = zone.direction === "Both" ? "Both" : zone.direction;
-      const underCap = dir === "Long" ? directionCounts.Long < 5 : dir === "Short" ? directionCounts.Short < 5 : directionCounts.Both < 5;
+      const isOverflowSlot = selected.length >= baseBoardCardCap;
+      const isStrongOverflow = zone.score >= 84 || (zone.score >= 74 && zone.precisionScore >= 80 && zone.sourceCount >= 4);
+      const directionCap = isOverflowSlot ? overflowDirectionCap : baseDirectionCap;
+      const underCap = dir === "Long" ? directionCounts.Long < directionCap : dir === "Short" ? directionCounts.Short < directionCap : directionCounts.Both < directionCap;
+      if (isOverflowSlot && !isStrongOverflow) continue;
       if (!duplicate && underCap) {
         selected.push(zone);
         directionCounts[dir] += 1;
       }
-      if (selected.length >= 12) break;
+      if (selected.length >= maxBoardCardCap) break;
     }
     return selected;
-  }, [scannerAiSignals, weeklyLevels, craterBoxes]);
+  }, [scannerAiSignals, weeklyLevels, craterBoxes, latestKnownMarketPrice]);
 
   const feedAudit = useMemo(() => {
     const evidence = scannerAiSignals.flatMap(buildLevelEvidenceCandidates);
@@ -1936,6 +1739,27 @@ useEffect(() => {
       { name: "Manual Craters", count: craterBoxes.length }
     ];
   }, [scannerAiSignals, weeklyLevels, craterBoxes]);
+
+  const latestSignalRows = useMemo(() => {
+    return aiSignals
+      .slice(0, 10)
+      .map((signal) => {
+        const payload = getSignalPayload(signal);
+        const price = parsePrice(firstDefined(payload.trigger_price, payload.price, payload.entry, payload.entry_price, signal.price));
+        const signalName = String(payload.signal || signal.signal || "Signal").replace(/_/g, " ");
+        const direction = String(payload.direction || signal.direction || "Both").toUpperCase();
+        const createdAt = signal.created_at || payload.created_at;
+        return {
+          id: signal.id || `${signalName}-${createdAt}`,
+          signalName,
+          direction,
+          price,
+          createdAt,
+          timeframe: timeframeFromPayload(payload, signalName) || String(payload.timeframe || signal.timeframe || "--"),
+          status: isGenericPriceAlertSignal(signal) ? "Price alert" : "Level feed"
+        };
+      });
+  }, [aiSignals]);
 
   const fetchManualLevelGrade = () => {
     const price = parsePrice(manualScanner.price);
@@ -2371,35 +2195,65 @@ const exportJournalCSV = () => {
 };
 
   const exportSetup = () => {
-    const payload = {
-      exportedAt: new Date().toLocaleString(),
-      grade: grade(report.score)[0],
-      precisionScore: report.score,
-      zoneScore: report.zoneScore,
-      score: report.score,
-      tradeInfo: {
-        entryPrice: form.tradeEntryPrice,
-        direction: form.direction,
-        bias1H: form.bias1H,
-        bias4H: form.bias4H,
-        trend: form.trend
-      },
-      recommendations,
-      confluences: report.rows.filter((r) => r.active),
-      tips,
-      result: {
-        result: form.result,
-        maxMove: form.maxMove,
-        maxDrawdown: form.maxDrawdown,
-        profitLoss: form.profitLoss,
-        notes: form.notes
-      }
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const [gradeLabel, gradeName] = grade(report.score);
+    const activeConfluences = report.rows.filter((r) => r.active);
+    const money = form.profitLoss ? `$${form.profitLoss}` : "Not recorded";
+    const reportLines = [
+      "PLAYMAKER SETUP REPORT",
+      "======================",
+      "",
+      `Exported: ${new Date().toLocaleString()}`,
+      `Grade: ${gradeLabel} - ${gradeName}`,
+      `Precision Score: ${Math.round(report.score)}`,
+      `Zone Score: ${Math.round(report.zoneScore)}`,
+      "",
+      "TRADE INFO",
+      "----------",
+      `Entry Price: ${form.tradeEntryPrice || "Not entered"}`,
+      `Direction: ${form.direction || "Not entered"}`,
+      `1H Bias: ${form.bias1H || "Not entered"}`,
+      `4H Bias: ${form.bias4H || "Not entered"}`,
+      `Trend: ${form.trend || "Not entered"}`,
+      "",
+      "SUGGESTED PLANS",
+      "---------------",
+      ...(recommendations.length
+        ? recommendations.map((plan) => {
+            const limit = Number(plan.limit).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const stopArea = Number(plan.stopArea).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return `${plan.stop} pt stop | Limit ${limit} | Stop ${stopArea} | ${plan.confidence} | ${plan.match}`;
+          })
+        : ["No plans available."]),
+      "",
+      "ACTIVE CONFLUENCES",
+      "------------------",
+      ...(activeConfluences.length
+        ? activeConfluences.map((row) => {
+            const pointsAway = Number(row.pointsAway || 0).toFixed(2);
+            return `${row.name}: ${row.score} pts | ${pointsAway} points away`;
+          })
+        : ["No active confluences selected."]),
+      "",
+      "PLAYMAKER NOTES",
+      "---------------",
+      ...(tips.length ? tips : ["No extra notes for this setup."]),
+      "",
+      "RESULT",
+      "------",
+      `Result: ${form.result || "Not recorded"}`,
+      `Max Move: ${form.maxMove || "Not recorded"}`,
+      `Max Drawdown: ${form.maxDrawdown || "Not recorded"}`,
+      `Profit / Loss: ${money}`,
+      `Notes: ${form.notes || "None"}`,
+      "",
+      "This file is a readable report export. Use Print / Save PDF for a cleaner client-facing copy."
+    ];
+
+    const blob = new Blob([reportLines.join("\n")], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `playmaker-setup-${Date.now()}.json`;
+    a.download = `playmaker-setup-report-${Date.now()}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -3154,6 +3008,32 @@ const exportJournalCSV = () => {
     clearAnchorTransientState(anchor);
   };
 
+  const restoreHiddenAiCards = () => {
+    if (!ownerMode) return;
+    setSubmittedAnchorKeys({});
+    setPulledAnchorKeys({});
+    setFilledAnchorKeys({});
+    setNotificationLog((prev) => [{
+      key: `RESTORE-HIDDEN-${Date.now()}`,
+      kind: "RESTORED",
+      title: "Hidden AI cards restored",
+      detail: `Pulled, filled, and submitted board-hide memory cleared - ${formatEastern(new Date())}`,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+  };
+
+  const restorePulledAiCards = () => {
+    if (!ownerMode) return;
+    setPulledAnchorKeys({});
+    setNotificationLog((prev) => [{
+      key: `RESTORE-PULLED-${Date.now()}`,
+      kind: "RESTORED",
+      title: "Pulled AI cards restored",
+      detail: `Pulled board memory cleared - ${formatEastern(new Date())}`,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+  };
+
   const submitAnchorToJournal = async (anchor, scope = "global") => {
     if (!anchor) return;
     const isGlobalSubmit = scope === "global";
@@ -3352,15 +3232,27 @@ const exportJournalCSV = () => {
     }, [])
     .filter((anchor) => !submittedRecordForAnchor(anchor));
 
+  const anchorMarketDistance = (anchor) => {
+    if (latestKnownMarketPrice === null) return null;
+    const price = parsePrice(anchor.entry || anchor.price);
+    return price === null ? null : Math.abs(price - latestKnownMarketPrice);
+  };
+
+  const isInLatestMarketRange = (anchor) => {
+    const distance = anchor.boardDistance ?? anchor.triggerDistance ?? anchorMarketDistance(anchor);
+    return distance === null || distance <= maxOrderCardDistancePoints;
+  };
+
   const rawActiveAnchors = [
-    ...filledPinnedAnchors,
     ...boardUnfilledOrders
+      .filter(isInLatestMarketRange)
       .filter((order) => !filledPinnedAnchors.some((filled) => anchorBaseKey(filled) === anchorBaseKey(order)))
       .map((order) => ({
       ...order,
       sourceType: order.sourceType || "Manual Order"
     })),
     ...rankedAiLimitZones
+      .filter(isInLatestMarketRange)
       .filter((zone) => !submittedZoneMatches(zone))
       .filter((zone) => !pulledRecordForAnchor(zone))
       .filter((zone) => !filledPinnedAnchors.some((filled) => {
@@ -3432,6 +3324,65 @@ const exportJournalCSV = () => {
     }))
   ];
 
+  const outOfRangeAiAnchors = rankedAiLimitZones
+    .filter((zone) => !isInLatestMarketRange(zone))
+    .filter((zone) => !submittedZoneMatches(zone))
+    .filter((zone) => !pulledRecordForAnchor(zone))
+    .map((zone) => ({
+      id: `out-of-range-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`,
+      date: formatEastern(zone.created_at),
+      updatedAt: formatEastern(zone.updated_at || zone.created_at),
+      direction: zone.direction,
+      entry: zone.price,
+      clusterLow: zone.clusterLow,
+      clusterHigh: zone.clusterHigh,
+      clusterWidth: zone.clusterWidth,
+      stopPlans: zone.stopPlans,
+      grade: zone.grade,
+      score: zone.score,
+      precisionScore: zone.precisionScore,
+      zoneScore: zone.zoneScore || zone.score,
+      sourceCount: zone.sourceCount || zone.evidence?.length || 0,
+      evidence: zone.evidence || [],
+      verification: getAnchorVerification(zone) || verifiedAnchors[String(zone.sourceId || "")] || verifiedAnchors[`zone-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`] || null,
+      result: "Unfilled",
+      orderStatus: "OUT OF RANGE / WAITING",
+      pendingOrder: true,
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      notes: `Waiting for price to return within ${maxOrderCardDistancePoints.toLocaleString()} pts. ${zone.boardDistanceMode === "alert" ? "Using old alert-led reading mode." : `Latest known price ${fmtPrice(latestKnownMarketPrice)}.`} Distance ${fmt(zone.boardDistance ?? zone.marketDistance ?? 0)} pts.`,
+      tradeImages: [],
+      top: `Waiting board - Center ${fmtPrice(zone.price)} - ${fmt(zone.boardDistance ?? zone.marketDistance ?? 0)} pts by ${zone.boardDistanceMode === "market" ? "market" : "alert"} distance - ${zone.reasons.join(" - ")}`,
+      sourceType: "AI Signal",
+      signal_id: zone.sourceId || "",
+      signalName: zone.label,
+      marketDistance: zone.marketDistance,
+      boardDistance: zone.boardDistance,
+      boardDistanceMode: zone.boardDistanceMode,
+      latestKnownMarketPrice: zone.latestKnownMarketPrice,
+      rawSignal: {
+        ...zone.payload,
+        id: zone.sourceId,
+        signal: zone.label,
+        direction: zone.direction,
+        price: zone.price,
+        entry: zone.price,
+        ai_grade: zone.grade,
+        ai_score: zone.score,
+        zone_score: zone.zoneScore || zone.score,
+        precision_score: zone.precisionScore || 0,
+        ai_status: "OUT OF RANGE / WAITING",
+        confluence_reasons: zone.reasons,
+        evidence: zone.evidence || [],
+        source_count: zone.sourceCount || zone.evidence?.length || 0,
+        market_distance: zone.marketDistance,
+        board_distance: zone.boardDistance,
+        board_distance_mode: zone.boardDistanceMode,
+        latest_known_price: zone.latestKnownMarketPrice
+      }
+    }));
+
   const activeAnchors = useMemo(() => {
     const best = new Map();
     rawActiveAnchors.forEach((anchor) => {
@@ -3453,6 +3404,9 @@ const exportJournalCSV = () => {
   const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
   const intermediateWatchlist = aiAnchorsOnly.filter((anchor) => ["B+", "B"].includes(anchor.grade));
   const watchLevels = aiAnchorsOnly.filter((anchor) => anchor.grade === "C");
+  const filledManagingLevels = filledPinnedAnchors
+    .filter((anchor) => !submittedRecordForAnchor(anchor))
+    .sort((a, b) => new Date(b.filledAt || b.updatedAt || b.date || 0).getTime() - new Date(a.filledAt || a.updatedAt || a.date || 0).getTime());
 
   useEffect(() => {
     const anchorKeyFor = (anchor) => {
@@ -3463,8 +3417,13 @@ const exportJournalCSV = () => {
 
     const notifyEligibleAnchors = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
     const currentAnchorMap = new Map(notifyEligibleAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
-    const priorAnchorMap = previousAnchorMapRef.current instanceof Map ? previousAnchorMapRef.current : new Map();
+    const priorAnchorMap = previousAnchorMapRef.current instanceof Map ? previousAnchorMapRef.current : null;
     const newNotices = [];
+
+    if (!priorAnchorMap) {
+      previousAnchorMapRef.current = currentAnchorMap;
+      return;
+    }
 
     currentAnchorMap.forEach((anchor, anchorKey) => {
       const oldAnchor = priorAnchorMap.get(anchorKey);
@@ -3574,14 +3533,20 @@ const exportJournalCSV = () => {
         <div className="flex gap-3">
 
           <button
-            onClick={signIn}
+            onClick={() => {
+              trackHomeClick("login_attempt", { pageArea: "login_form", buttonText: "Login" });
+              signIn();
+            }}
             className="flex-1 bg-[#ffcc19] text-black font-bold p-3 rounded"
           >
             Login
           </button>
 
           <button
-            onClick={signUp}
+            onClick={() => {
+              trackHomeClick("register_attempt", { pageArea: "login_form", buttonText: "Register" });
+              signUp();
+            }}
             className="flex-1 border border-[#ffcc19] p-3 rounded"
           >
             Register
@@ -3653,13 +3618,19 @@ const exportJournalCSV = () => {
           <SocialLinks />
           <PolicyLinks onOpen={setPolicyView} />
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              trackHomeClick("paid_check_again", { pageArea: "access_blocked", buttonText: "I Paid Check Again", visitorState: "blocked" });
+              window.location.reload();
+            }}
             className="mt-3 w-full rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
           >
             I Paid — Check Again
           </button>
           <button
-            onClick={signOut}
+            onClick={() => {
+              trackHomeClick("sign_out_from_access", { pageArea: "access_blocked", buttonText: "Sign Out", visitorState: "blocked" });
+              signOut();
+            }}
             className="mt-3 w-full rounded-xl border border-zinc-700 px-5 py-3 font-black text-zinc-300"
           >
             Sign Out
@@ -3787,7 +3758,58 @@ const exportJournalCSV = () => {
           </div>
         </div>
 
-        {(activeAnchors.length > 0 || pulledAnchors.length > 0) && (
+        {ownerMode && (
+          <div className="mt-6 rounded-3xl border border-zinc-800 bg-[#050505] p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Owner Signal Tools</div>
+                <p className="mt-1 text-sm text-zinc-400">Use this when fresh signals are coming in but the board looks empty because cards were pulled, filled, or submitted earlier.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={restorePulledAiCards} className="rounded-xl border border-[#00d27a] px-4 py-2 text-sm font-black text-[#00d27a] hover:bg-[#001f14]">Restore Pulled Cards</button>
+                <button onClick={restoreHiddenAiCards} className="rounded-xl bg-[#ffcc19] px-4 py-2 text-sm font-black text-black">Restore Hidden AI Cards</button>
+                <button onClick={fetchAiSignals} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm font-black text-zinc-200 hover:bg-zinc-900">Refresh Signal Feed</button>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3 lg:grid-cols-2">
+              <div className="rounded-2xl border border-zinc-800 bg-black p-4">
+                <div className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Latest Signal Rows</div>
+                <div className="mt-3 grid gap-2">
+                  {latestSignalRows.length === 0 && <div className="text-sm text-zinc-500">No signal rows loaded yet.</div>}
+                  {latestSignalRows.slice(0, 6).map((row) => (
+                    <div key={row.id} className="rounded-xl border border-zinc-900 bg-[#090909] p-3 text-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <b className="text-[#ffcc19]">{row.signalName}</b>
+                        <span className="rounded-full border border-zinc-700 px-2 py-1 text-[10px] font-black text-zinc-300">{row.status}</span>
+                      </div>
+                      <div className="mt-1 text-zinc-300">{row.direction} {row.price !== null ? fmtPrice(row.price) : "--"} • {row.timeframe}</div>
+                      <div className="mt-1 text-xs text-zinc-500">{formatEastern(row.createdAt)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-zinc-800 bg-black p-4">
+                <div className="text-xs font-black uppercase tracking-[0.18em] text-zinc-400">Board Gate Check</div>
+                <div className="mt-3 grid gap-2 text-sm text-zinc-300">
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Loaded signal rows</span><b className="text-white">{aiSignals.length}</b></div>
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Latest known price</span><b className="text-white">{latestKnownMarketPrice !== null ? fmtPrice(latestKnownMarketPrice) : "--"}</b></div>
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Board distance mode</span><b className="text-white">Alert-led</b></div>
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Built AI cards</span><b className="text-white">{aiAnchorsOnly.length}</b></div>
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Out of range waiting</span><b className="text-white">{outOfRangeAiAnchors.length}</b></div>
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Pulled cards hidden</span><b className="text-white">{Object.keys(pulledAnchorKeys).length}</b></div>
+                  <div className="flex items-center justify-between rounded-xl bg-[#090909] px-3 py-2"><span>Submitted cards hidden</span><b className="text-white">{Object.keys(submittedAnchorKeys).length}</b></div>
+                  <div className="rounded-xl border border-zinc-800 bg-[#090909] p-3 text-xs text-zinc-500">
+                    Board holds 12 normal cards and can expand to 16 only for stronger stacked setups. Cards still pass score, source-stack, duplicate, and {maxOrderCardDistancePoints.toLocaleString()} point alert-led distance gates.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {(activeAnchors.length > 0 || filledManagingLevels.length > 0 || outOfRangeAiAnchors.length > 0 || pulledAnchors.length > 0) && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -3800,6 +3822,8 @@ const exportJournalCSV = () => {
             <LevelSection title="👑 Trade Anchors" subtitle="A+ / A levels: strongest limit-order candidates." items={tradeAnchorLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Intermediate Watchlist" subtitle="B+ / B levels: good clusters still building or needing discretion." items={intermediateWatchlist} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
+            <LevelSection title="Filled / Managing" subtitle="Filled cards move here so the main board can keep scanning. Submit to journal when you are done managing the trade." items={filledManagingLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} mode="filled" />
+            <LevelSection title="Out of Range / Waiting" subtitle={`Good confluence more than ${maxOrderCardDistancePoints.toLocaleString()} pts from latest known price. It auto-returns when price comes back and the stack still qualifies.`} items={outOfRangeAiAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Pulled Orders" subtitle="Cards pulled off the main board. Restore them if the limit is still good, or journal/delete them later." items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
           </div>
         )}
@@ -3808,7 +3832,7 @@ const exportJournalCSV = () => {
         )}
 
         <div className="mt-4 flex flex-wrap gap-3">
-          <button onClick={exportSetup} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black shadow-lg shadow-yellow-950/30">Export Setup File</button>
+          <button onClick={exportSetup} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black shadow-lg shadow-yellow-950/30">Export Setup Report</button>
           <button onClick={printSetup} className="rounded-xl border border-[#ffcc19] bg-black px-5 py-3 font-black text-[#ffcc19] hover:bg-[#171200]">Print / Save PDF</button>
         </div>
 
@@ -4211,6 +4235,7 @@ function EvidenceList({ evidence = [] }) {
 function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor, onRestoreAnchor, onDeletePulledAnchor, mode = "active" }) {
   const isAi = anchor.sourceType === "AI Signal";
   const isPulled = mode === "pulled" || anchor.pulled;
+  const isFilledMode = mode === "filled" || anchor.filledLocked;
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
   const verificationKey = String(anchor.signal_id || anchor.sourceId || anchor.id || anchor.entry || "");
@@ -4532,12 +4557,12 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         )}
         {!isPulled && (
           <>
-        {ownerMode && (
+        {ownerMode && !isFilledMode && (
         <button
           onClick={() => onMarkFilled?.(anchor)}
           className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
         >
-          Mark Filled — Keep On Board
+          Move To Filled / Managing
         </button>
         )}
         <button
@@ -4665,7 +4690,7 @@ const playmakerInfoMessage = [
 ].join("   |   ");
 
 const playmakerPromoMessage = [
-  "Follow and like all Playmaker social pages to receive 50% off your first month",
+  "50% off your first month when you follow and like all Playmaker social pages",
   "New members get a 1-on-1 30 minute StreamYard tutorial with Mr. DJ Harrison"
 ].join("   |   ");
 
@@ -4702,6 +4727,11 @@ function SocialLinks() {
             href={link.href}
             target="_blank"
             rel="me noreferrer"
+            onClick={() => trackHomeClick(`social_${link.label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`, {
+              pageArea: "social_links",
+              linkUrl: link.href,
+              buttonText: link.label
+            })}
             className="rounded-xl border border-zinc-800 bg-[#090909] px-3 py-2 text-center text-xs font-black text-zinc-300 transition hover:border-[#ffcc19] hover:text-[#ffcc19]"
           >
             {link.label}
@@ -4723,6 +4753,9 @@ function HighlightVideo() {
           playsInline
           preload="metadata"
           src="/playmaker-demo.mp4"
+          onPlay={() => trackHomeClick("highlight_video_play", { pageArea: "highlight_video", buttonText: "Play highlight video" })}
+          onPause={() => trackHomeClick("highlight_video_pause", { pageArea: "highlight_video", buttonText: "Pause highlight video" })}
+          onEnded={() => trackHomeClick("highlight_video_complete", { pageArea: "highlight_video", buttonText: "Complete highlight video" })}
         >
           Your browser does not support the Playmaker highlights video.
         </video>
@@ -4731,6 +4764,11 @@ function HighlightVideo() {
         href={YOUTUBE_DEMO_URL}
         target="_blank"
         rel="noreferrer"
+        onClick={() => trackHomeClick("tutorial_video_youtube", {
+          pageArea: "highlight_video",
+          linkUrl: YOUTUBE_DEMO_URL,
+          buttonText: "Tutorial Video"
+        })}
         className="mt-3 inline-flex w-full justify-center rounded-xl border border-zinc-800 bg-[#090909] px-4 py-2 text-xs font-black text-zinc-300 transition hover:border-[#ffcc19] hover:text-[#ffcc19]"
       >
         Tutorial Video
@@ -4754,7 +4792,10 @@ function PolicyLinks({ onOpen }) {
           <button
             key={link.key}
             type="button"
-            onClick={() => onOpen(link.key)}
+            onClick={() => {
+              trackHomeClick(`policy_${link.key}`, { pageArea: "policy_links", buttonText: link.label });
+              onOpen(link.key);
+            }}
             className="font-bold text-zinc-400 underline-offset-4 hover:text-[#ffcc19] hover:underline"
           >
             {link.label}
@@ -4971,3 +5012,4 @@ function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEnt
 function Behavior({ behavior, journal, learningStats = [] }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Behavior Rating</Title><div className="mt-6 text-7xl font-black text-[#00d27a]">{behavior.score}/10</div><p className="mt-3 text-zinc-300">Based on saved results and notes. Notes mentioning chasing/late reduce behavior score. Notes mentioning patience/followed plan improve it.</p><div className="mt-5 grid grid-cols-4 gap-3"><Small label="Trades" value={behavior.total} /><Small label="Wins" value={behavior.wins} /><Small label="Losses" value={behavior.losses} /><Small label="BE" value={behavior.be} /></div></Card><Card><Title>Private AI Result Learning</Title><p className="mt-2 text-sm text-zinc-400">Only your logged-in account sees this. It calculates which source families and repeat-level combinations are working from your saved results.</p><div className="mt-4 space-y-3">{learningStats.slice(0,8).map((row) => <div key={row.name} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex items-center justify-between gap-3"><b className="text-[#ffcc19]">{row.name}</b><span className="font-black text-[#00d27a]">{row.winRate}%</span></div><div className="mt-1 text-xs text-zinc-500">Trades {row.trades} • Wins {row.wins} • Losses {row.losses} • BE {row.be} • 200+ moves {row.bigMove200 || 0} • Avg move {fmt(row.avgMaxMove)} • Avg DD {fmt(row.avgDrawdown)}</div></div>)}{learningStats.length === 0 && <div className="text-zinc-500">Save completed trade results to populate AI learning stats.</div>}</div></Card><Card className="lg:col-span-2"><Title>Behavior Notes</Title><div className="mt-4 space-y-3">{journal.slice(0,5).map((j) => <div key={j.id} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><b>{j.result}</b><p className="mt-1 text-zinc-400">{j.notes || "No notes"}</p></div>)}{journal.length === 0 && <div className="text-zinc-500">Save journal results to populate behavior reports.</div>}</div></Card></div>;
 }
+
