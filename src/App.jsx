@@ -182,6 +182,20 @@ const isCompletedTradeResult = (item) => {
   return ["win", "loss", "be"].includes(normalizeStatus(item?.result));
 };
 
+const journalNumberOrNull = (value) => {
+  const text = String(value ?? "").replace(/,/g, "").trim();
+  if (!text) return null;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const averageJournalNumber = (items, key) => {
+  const values = items
+    .map((item) => journalNumberOrNull(item?.[key]))
+    .filter((value) => value !== null);
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+};
+
 const isManualOrder = (item) => {
   const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
   const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
@@ -1010,9 +1024,9 @@ useEffect(() => {
           result: row.result || "Unfilled",
           orderStatus: row.result === "Unfilled" ? "Unfilled" : "Reported",
           pendingOrder: row.result === "Unfilled",
-          maxMove: row.max_move || "",
-          maxDrawdown: row.max_drawdown || "",
-          profitLoss: row.profit_loss || "",
+          maxMove: row.max_move ?? "",
+          maxDrawdown: row.max_drawdown ?? "",
+          profitLoss: row.profit_loss ?? "",
           discountPoints: "",
           maxDiscountPoints: "",
           notes: row.notes || "",
@@ -2164,11 +2178,11 @@ useEffect(() => {
     const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
     const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
     const unfilled = journal.filter((j) => isOpenOrder(j)).length;
-    const totalPL = closed.reduce((sum, j) => sum + n(j.profitLoss), 0);
-    const avgPL = closed.length ? totalPL / closed.length : 0;
-    const avgMove = closed.length ? closed.reduce((sum, j) => sum + n(j.maxMove), 0) / closed.length : 0;
-    const avgDrawdown = closed.length ? closed.reduce((sum, j) => sum + n(j.maxDrawdown), 0) / closed.length : 0;
-    const avgDiscount = closed.length ? closed.reduce((sum, j) => sum + n(j.discountPoints), 0) / closed.length : 0;
+    const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
+    const avgPL = averageJournalNumber(closed, "profitLoss");
+    const avgMove = averageJournalNumber(closed, "maxMove");
+    const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
+    const avgDiscount = averageJournalNumber(closed, "discountPoints");
     const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
     return { total: journal.length, closed: closed.length, wins, losses, be, unfilled, winRate, totalPL, avgPL, avgMove, avgDrawdown, avgDiscount };
   }, [journal]);
@@ -2366,15 +2380,15 @@ const exportJournalCSV = () => {
     user_id: user.id,
     symbol: "NQ",
     direction: item.direction,
-    entry_price: Number(item.entry) || null,
+    entry_price: journalNumberOrNull(item.entry),
     grade: item.grade,
     score: item.score,
     zone_score: report.zoneScore || report.score,
     precision_score: report.precisionScore || report.score,
     result: item.result,
-    max_move: Number(item.maxMove) || null,
-    max_drawdown: Number(item.maxDrawdown) || null,
-    profit_loss: Number(item.profitLoss) || null,
+    max_move: journalNumberOrNull(item.maxMove),
+    max_drawdown: journalNumberOrNull(item.maxDrawdown),
+    profit_loss: journalNumberOrNull(item.profitLoss),
     notes: item.notes,
     confluences: item.evidence?.length ? item.evidence : report.active,
     recommendations,
@@ -2467,13 +2481,13 @@ const exportJournalCSV = () => {
         signal_id: item.signal_id || null,
         symbol: "NQ",
         direction: item.direction,
-        entry_price: Number(item.entry) || null,
+        entry_price: journalNumberOrNull(item.entry),
         grade: item.grade,
         score: Number(item.score) || null,
         result: item.result,
-        max_move: Number(item.maxMove) || null,
-        max_drawdown: Number(item.maxDrawdown) || null,
-        profit_loss: Number(item.profitLoss) || null,
+        max_move: journalNumberOrNull(item.maxMove),
+        max_drawdown: journalNumberOrNull(item.maxDrawdown),
+        profit_loss: journalNumberOrNull(item.profitLoss),
         confluences: item.evidence?.length ? item.evidence : report.active,
         recommendations,
         notes: item.notes || null
