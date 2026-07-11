@@ -10,6 +10,49 @@
     />
     <link rel="canonical" href="https://www.futuresplaymaker.com/how-it-works.html" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=clean-logo" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "PlayMaker", "item": "https://www.futuresplaymaker.com/" },
+              { "@type": "ListItem", "position": 2, "name": "How PlayMaker Works", "item": "https://www.futuresplaymaker.com/how-it-works.html" }
+            ]
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "How does PlayMaker review a trade setup?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PlayMaker helps traders review direction, nearby levels, confluence, stop planning, and trade management before journaling the result."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can PlayMaker help with high-of-day and low-of-day setups?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. PlayMaker includes language and workflow support for reviewing high-of-day, low-of-day, and NQ futures reversal setup areas."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What happens after a trade fills?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "A filled trade can be managed, noted, and later submitted into the trading journal so the result and lessons are saved."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -34,8 +77,15 @@
       .button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 10px; padding: 0 18px; text-decoration: none; font-weight: 900; }
       .primary { background: #ffcc19; color: #050505; }
       .secondary { border: 1px solid #ffcc19; color: #ffcc19; }
+      .section { margin-top: 34px; }
+      .link-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+      .text-link { display: block; border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; text-decoration: none; }
+      .text-link strong { display: block; color: #ffcc19; }
+      .text-link span { display: block; margin-top: 4px; color: #cfcfcf; font-size: 14px; }
+      .faq { display: grid; gap: 12px; margin-top: 16px; }
+      .faq article { border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; }
       footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
-      @media (max-width: 700px) { .nav { align-items: flex-start; flex-direction: column; } .step { grid-template-columns: 1fr; } }
+      @media (max-width: 700px) { .nav { align-items: flex-start; flex-direction: column; } .step, .link-grid { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
@@ -89,6 +139,36 @@
         <a class="button primary" href="/">Open PlayMaker</a>
         <a class="button secondary" href="/trading-journal.html">View Journal Features</a>
       </div>
+      <section class="section" aria-label="Related PlayMaker pages">
+        <h2>Related PlayMaker Pages</h2>
+        <div class="link-grid">
+          <a class="text-link" href="/about.html">
+            <strong>PlayMaker futures trading app</strong>
+            <span>Learn what PlayMaker is built to help NQ futures traders organize.</span>
+          </a>
+          <a class="text-link" href="/trading-journal.html">
+            <strong>NQ futures trading journal</strong>
+            <span>See how PlayMaker tracks trade results, points, drawdown, and notes.</span>
+          </a>
+        </div>
+      </section>
+      <section class="section" aria-label="How PlayMaker works FAQ">
+        <h2>How PlayMaker Works FAQ</h2>
+        <div class="faq">
+          <article>
+            <h2>How does PlayMaker review a trade setup?</h2>
+            <p>PlayMaker helps traders review direction, nearby levels, confluence, stop planning, and trade management before journaling the result.</p>
+          </article>
+          <article>
+            <h2>Can PlayMaker help with high-of-day and low-of-day setups?</h2>
+            <p>Yes. PlayMaker includes language and workflow support for reviewing high-of-day, low-of-day, and NQ futures reversal setup areas.</p>
+          </article>
+          <article>
+            <h2>What happens after a trade fills?</h2>
+            <p>A filled trade can be managed, noted, and later submitted into the trading journal so the result and lessons are saved.</p>
+          </article>
+        </div>
+      </section>
     </main>
     <footer>
       <div class="wrap">Trading futures involves risk. PlayMaker is an educational workflow tool, not financial advice.</div>

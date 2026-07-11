@@ -10,6 +10,49 @@
     />
     <link rel="canonical" href="https://www.futuresplaymaker.com/trading-journal.html" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=clean-logo" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "PlayMaker", "item": "https://www.futuresplaymaker.com/" },
+              { "@type": "ListItem", "position": 2, "name": "PlayMaker Trading Journal", "item": "https://www.futuresplaymaker.com/trading-journal.html" }
+            ]
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What does the PlayMaker trading journal track?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "The PlayMaker journal tracks trade outcomes, NQ points, max move, drawdown, notes, wins, losses, break-even trades, and rolling performance."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Why journal NQ futures reversal trades?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Journaling helps traders study whether high-of-day, low-of-day, and reversal setups followed the plan or exposed repeat mistakes."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does drawdown always count against performance?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Drawdown is useful for tracking risk behavior. In PlayMaker, it can be reviewed separately from final points so traders can study both outcome and risk."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -37,8 +80,15 @@
       .button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 10px; padding: 0 18px; text-decoration: none; font-weight: 900; }
       .primary { background: #ffcc19; color: #050505; }
       .secondary { border: 1px solid #ffcc19; color: #ffcc19; }
+      .section { margin-top: 34px; }
+      .link-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+      .text-link { display: block; border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; text-decoration: none; }
+      .text-link strong { display: block; color: #ffcc19; }
+      .text-link span { display: block; margin-top: 4px; color: #cfcfcf; font-size: 14px; }
+      .faq { display: grid; gap: 12px; margin-top: 16px; }
+      .faq article { border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; }
       footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
-      @media (max-width: 760px) { .nav { align-items: flex-start; flex-direction: column; } .grid, .stats { grid-template-columns: 1fr; } }
+      @media (max-width: 760px) { .nav { align-items: flex-start; flex-direction: column; } .grid, .stats, .link-grid { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
@@ -86,6 +136,36 @@
         <a class="button primary" href="/">Open PlayMaker</a>
         <a class="button secondary" href="/how-it-works.html">How It Works</a>
       </div>
+      <section class="section" aria-label="Related PlayMaker pages">
+        <h2>Related PlayMaker Pages</h2>
+        <div class="link-grid">
+          <a class="text-link" href="/about.html">
+            <strong>PlayMaker futures trading app</strong>
+            <span>Learn how PlayMaker supports NQ signal tracking and reversal setup review.</span>
+          </a>
+          <a class="text-link" href="/how-it-works.html">
+            <strong>NQ futures reversal setup workflow</strong>
+            <span>See the setup review and management workflow before the journal entry.</span>
+          </a>
+        </div>
+      </section>
+      <section class="section" aria-label="Trading journal FAQ">
+        <h2>Trading Journal FAQ</h2>
+        <div class="faq">
+          <article>
+            <h2>What does the PlayMaker trading journal track?</h2>
+            <p>The PlayMaker journal tracks trade outcomes, NQ points, max move, drawdown, notes, wins, losses, break-even trades, and rolling performance.</p>
+          </article>
+          <article>
+            <h2>Why journal NQ futures reversal trades?</h2>
+            <p>Journaling helps traders study whether high-of-day, low-of-day, and reversal setups followed the plan or exposed repeat mistakes.</p>
+          </article>
+          <article>
+            <h2>Does drawdown always count against performance?</h2>
+            <p>Drawdown is useful for tracking risk behavior. In PlayMaker, it can be reviewed separately from final points so traders can study both outcome and risk.</p>
+          </article>
+        </div>
+      </section>
     </main>
     <footer>
       <div class="wrap">Trading futures involves risk. PlayMaker is an educational workflow tool, not financial advice.</div>

@@ -10,6 +10,49 @@
     />
     <link rel="canonical" href="https://www.futuresplaymaker.com/about.html" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=clean-logo" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "PlayMaker", "item": "https://www.futuresplaymaker.com/" },
+              { "@type": "ListItem", "position": 2, "name": "About PlayMaker", "item": "https://www.futuresplaymaker.com/about.html" }
+            ]
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is PlayMaker?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PlayMaker is a futures trading workflow app for organizing NQ signal levels, reviewing reversal setups, planning limit orders, and journaling trade results."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does PlayMaker focus on top and bottom picking?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PlayMaker helps traders review high-of-day, low-of-day, and other potential reversal areas with structure, confluence, risk planning, and journaling."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Is PlayMaker financial advice?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. PlayMaker is an educational trading workflow tool. Futures trading involves risk, and traders are responsible for their own decisions."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -100,9 +143,15 @@
       h2 { margin: 0 0 10px; color: #ffcc19; font-size: 20px; }
       .card p, .section p { margin: 0; color: #cfcfcf; }
       .section { margin-top: 34px; }
+      .link-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+      .text-link { display: block; border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; text-decoration: none; }
+      .text-link strong { display: block; color: #ffcc19; }
+      .text-link span { display: block; margin-top: 4px; color: #cfcfcf; font-size: 14px; }
+      .faq { display: grid; gap: 12px; margin-top: 16px; }
+      .faq article { border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; }
       footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
       @media (max-width: 780px) {
-        .hero, .grid { grid-template-columns: 1fr; }
+        .hero, .grid, .link-grid { grid-template-columns: 1fr; }
         .nav { align-items: flex-start; flex-direction: column; }
       }
     </style>
@@ -156,6 +205,36 @@
         <p>
           PlayMaker is focused on structure for NQ futures traders studying market top and bottom trading, reversal areas, and strong confluence. It is not a promise of results, and it does not remove trading risk. The goal is to help traders slow down, compare levels, review confluence, and keep better records.
         </p>
+      </section>
+      <section class="section" aria-label="Explore PlayMaker">
+        <h2>Explore PlayMaker</h2>
+        <div class="link-grid">
+          <a class="text-link" href="/how-it-works.html">
+            <strong>NQ futures reversal setup workflow</strong>
+            <span>See how PlayMaker organizes setup review, confluence, and trade management.</span>
+          </a>
+          <a class="text-link" href="/trading-journal.html">
+            <strong>NQ futures trading journal</strong>
+            <span>Learn how PlayMaker tracks points, drawdown, notes, and rolling performance.</span>
+          </a>
+        </div>
+      </section>
+      <section class="section" aria-label="PlayMaker FAQ">
+        <h2>PlayMaker FAQ</h2>
+        <div class="faq">
+          <article>
+            <h2>What is PlayMaker?</h2>
+            <p>PlayMaker is a futures trading workflow app for organizing NQ signal levels, reviewing reversal setups, planning limit orders, and journaling trade results.</p>
+          </article>
+          <article>
+            <h2>Does PlayMaker focus on top and bottom picking?</h2>
+            <p>PlayMaker helps traders review high-of-day, low-of-day, and other potential reversal areas with structure, confluence, risk planning, and journaling.</p>
+          </article>
+          <article>
+            <h2>Is PlayMaker financial advice?</h2>
+            <p>No. PlayMaker is an educational trading workflow tool. Futures trading involves risk, and traders are responsible for their own decisions.</p>
+          </article>
+        </div>
       </section>
     </main>
     <footer>
