@@ -200,6 +200,20 @@ const sumJournalNumber = (items, key) => {
   return items.reduce((sum, item) => sum + (journalNumberOrNull(item?.[key]) ?? 0), 0);
 };
 
+const journalNetPoints = (item) => {
+  const result = normalizeStatus(item?.result);
+  const maxMove = journalNumberOrNull(item?.maxMove) ?? 0;
+  const maxDrawdown = Math.abs(journalNumberOrNull(item?.maxDrawdown) ?? 0);
+
+  if (result === "win") return maxMove;
+  if (result === "loss") return -maxDrawdown;
+  return 0;
+};
+
+const sumJournalNetPoints = (items) => {
+  return items.reduce((sum, item) => sum + journalNetPoints(item), 0);
+};
+
 const journalDateMs = (item) => {
   const raw = item?.createdAt || item?.created_at || item?.date;
   const parsed = new Date(raw).getTime();
@@ -210,6 +224,14 @@ const journalDateMs = (item) => {
   const [, month, day, year] = match;
   const fallback = new Date(Number(year), Number(month) - 1, Number(day)).getTime();
   return Number.isFinite(fallback) ? fallback : null;
+};
+
+const journalDayKey = (date) => {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+};
+
+const formatJournalDay = (date) => {
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
 const formatSignedPoints = (value) => {
@@ -2202,7 +2224,7 @@ useEffect(() => {
     const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
     const unfilled = journal.filter((j) => isOpenOrder(j)).length;
     const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
-    const totalPoints = sumJournalNumber(closed, "maxMove");
+    const totalPoints = sumJournalNetPoints(closed);
     const avgPL = averageJournalNumber(closed, "profitLoss");
     const avgMove = averageJournalNumber(closed, "maxMove");
     const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
@@ -2217,7 +2239,37 @@ useEffect(() => {
     const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
     const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
     const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
-    const rollingPoints = sumJournalNumber(rollingClosed, "maxMove");
+    const rollingPoints = sumJournalNetPoints(rollingClosed);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const rollingDays = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(today);
+      date.setDate(today.getDate() - (6 - index));
+      return {
+        key: journalDayKey(date),
+        label: formatJournalDay(date),
+        points: 0,
+        wins: 0,
+        losses: 0,
+        be: 0,
+        trades: 0
+      };
+    });
+    const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
+    rollingClosed.forEach((trade) => {
+      const tradeMs = journalDateMs(trade);
+      if (tradeMs === null) return;
+      const tradeDate = new Date(tradeMs);
+      tradeDate.setHours(0, 0, 0, 0);
+      const day = dayMap.get(journalDayKey(tradeDate));
+      if (!day) return;
+      const result = normalizeStatus(trade.result);
+      day.points += journalNetPoints(trade);
+      day.trades += 1;
+      if (result === "win") day.wins += 1;
+      if (result === "loss") day.losses += 1;
+      if (result === "be") day.be += 1;
+    });
     return {
       total: journal.length,
       closed: closed.length,
@@ -2238,7 +2290,10 @@ useEffect(() => {
         losses: rollingLosses,
         be: rollingBe,
         winRate: rollingWinRate,
-        points: rollingPoints
+        points: rollingPoints,
+        days: rollingDays,
+        rangeLabel: `${rollingDays[0]?.label || ""} - ${rollingDays[6]?.label || ""}`,
+        today: rollingDays[6]
       }
     };
   }, [journal]);
@@ -3819,6 +3874,9 @@ const exportJournalCSV = () => {
             <div className="mb-5 flex items-center gap-2 text-[#ffcc19] font-black tracking-[0.24em] text-sm"><span className="text-2xl tracking-normal">👑</span><span>THE PLAYMAKER</span></div>
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
+            <div className="max-w-sm">
+              <RollingSevenStats stats={journalStats?.rolling7} />
+            </div>
           </div>
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
             <div className="flex items-start gap-5">
@@ -5064,10 +5122,39 @@ function Small({ label, value }) {
 
 function RollingSevenStats({ stats }) {
   const data = stats || { trades: 0, wins: 0, losses: 0, be: 0, winRate: 0, points: 0 };
+  const days = data.days?.length ? data.days : Array.from({ length: 7 }, (_, index) => ({ label: `Day ${index + 1}`, points: 0 }));
+  const values = days.map((day) => Number(day.points) || 0);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+  const chartPoints = values
+    .map((value, index) => {
+      const x = 8 + (index * 104) / Math.max(days.length - 1, 1);
+      const y = 34 - ((value - min) / range) * 24;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const zeroY = 34 - ((0 - min) / range) * 24;
+  const today = data.today || days[days.length - 1] || { label: "Today", points: 0 };
+  const totalPointsColor = Number(data.points) < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
+  const todayPointsColor = Number(today.points) < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
   return (
-    <div className="mt-3 rounded-xl border border-[#00d27a] bg-[#001a0f] p-3 text-[#00f09a] shadow-lg shadow-green-950/30">
+    <div className="mt-3 rounded-xl border border-[#2c2300] bg-black p-3 text-white shadow-lg shadow-black/40">
       <div className="text-[10px] font-black uppercase tracking-[0.18em]">Rolling 7 Days</div>
-      <div className="mt-1 text-lg font-black">{formatSignedPoints(data.points)} NQ points</div>
+      <div className="mt-1 flex items-center justify-between gap-3 text-[11px] font-black text-white">
+        <span>{data.rangeLabel || "Last 7 days"}</span>
+        <span className="text-right">{today.label}: <span className={todayPointsColor}>{formatSignedPoints(today.points)} NQ</span></span>
+      </div>
+      <div className="mt-1 text-lg font-black"><span className={totalPointsColor}>{formatSignedPoints(data.points)}</span> NQ points</div>
+      <svg viewBox="0 0 120 42" className="mt-2 h-12 w-full overflow-visible rounded-lg border border-zinc-800 bg-[#090909]">
+        <line x1="6" x2="114" y1={zeroY} y2={zeroY} stroke="#3f3f46" strokeWidth="1" strokeDasharray="3 3" />
+        <polyline points={chartPoints} fill="none" stroke="#ffcc19" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {values.map((value, index) => {
+          const x = 8 + (index * 104) / Math.max(days.length - 1, 1);
+          const y = 34 - ((value - min) / range) * 24;
+          return <circle key={`${days[index]?.label || index}-${index}`} cx={x} cy={y} r="2.4" fill={value >= 0 ? "#00f09a" : "#ff4d4d"} />;
+        })}
+      </svg>
       <div className="mt-1 text-xs font-black">
         W {data.wins} / L {data.losses} / BE {data.be} • {data.winRate}% • {data.trades} trades
       </div>
