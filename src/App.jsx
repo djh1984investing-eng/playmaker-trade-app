@@ -5167,6 +5167,34 @@ function Small({ label, value }) {
   return <div className="rounded-xl border border-zinc-800 bg-black p-3"><div className="text-xs text-zinc-500">{label}</div><div className="font-black">{value}</div></div>;
 }
 
+function JournalPointsCounter({ stats }) {
+  const totalPoints = Number(stats?.totalPoints) || 0;
+  const pointsColor = totalPoints < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
+  return (
+    <div className="mt-4 rounded-2xl border border-[#2c2300] bg-black p-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#ffcc19]">Journal Points Counter</div>
+          <div className="mt-1 text-3xl font-black">
+            <span className={pointsColor}>{formatSignedPoints(totalPoints)}</span> NQ points
+          </div>
+        </div>
+        <div className="text-right text-xs font-black text-zinc-300">
+          W {stats.wins} / L {stats.losses} / BE {stats.be}<br />
+          {stats.winRate}% win rate - {stats.closed} closed
+        </div>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-4">
+        <Small label="Total Trades" value={stats.total} />
+        <Small label="Unfilled" value={stats.unfilled} />
+        <Small label="Avg Max Move" value={fmt(stats.avgMove)} />
+        <Small label="Avg Drawdown" value={fmt(stats.avgDrawdown)} />
+      </div>
+      <RollingSevenStats stats={stats.rolling7} />
+    </div>
+  );
+}
+
 function RollingSevenStats({ stats }) {
   const data = stats || { trades: 0, wins: 0, losses: 0, be: 0, winRate: 0, points: 0 };
   const fallbackToday = new Date();
@@ -5271,6 +5299,7 @@ function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEnt
 
       <Card>
         <Title>Journal Dashboard</Title>
+        <JournalPointsCounter stats={stats} />
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           <Small label="Total Trades" value={stats.total} />
           <Small label="Closed" value={stats.closed} />
