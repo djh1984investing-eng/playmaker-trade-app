@@ -587,7 +587,6 @@ useEffect(() => {
     const { data, error } = await supabase
       .from("trade_journal")
       .select("created_at,result,max_move,max_drawdown,profit_loss,verification,notes")
-      .in("result", ["Win", "Loss", "BE"])
       .order("created_at", { ascending: false })
       .limit(250);
 
@@ -600,7 +599,9 @@ useEffect(() => {
     const globalRows = (data || []).filter((row) => {
       const scope = String(row.verification?.journalScope || row.verification?.scope || "").toLowerCase();
       const notes = String(row.notes || "").toLowerCase();
-      return scope === "global" || (!scope && notes.includes("ai signal:") && !notes.includes("manual trade:"));
+      const completed = isCompletedTradeResult({ result: row.result });
+      const automaticSignal = notes.includes("ai signal:") && !notes.includes("manual trade:");
+      return completed && (scope === "global" || (!scope && automaticSignal));
     });
 
     setGlobalJournal(globalRows.map((row) => ({
