@@ -3764,6 +3764,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
+        <RollingSevenStats stats={journalStats?.rolling7} />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3874,7 +3875,7 @@ const exportJournalCSV = () => {
             <div className="mb-5 flex items-center gap-2 text-[#ffcc19] font-black tracking-[0.24em] text-sm"><span className="text-2xl tracking-normal">👑</span><span>THE PLAYMAKER</span></div>
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
-            <div className="max-w-sm">
+            <div className="mx-auto max-w-xl">
               <RollingSevenStats stats={journalStats?.rolling7} />
             </div>
           </div>
@@ -3890,7 +3891,6 @@ const exportJournalCSV = () => {
               <div className="mt-1 break-all">{user?.email || "No email"}</div>
               <button onClick={signOut} className="mt-3 rounded-lg border border-[#ffcc19] px-3 py-2 font-black text-[#ffcc19] hover:bg-[#171200]">Sign Out</button>
             </div>
-            <RollingSevenStats stats={journalStats?.rolling7} />
           </div>
         </div>
 
@@ -5122,7 +5122,14 @@ function Small({ label, value }) {
 
 function RollingSevenStats({ stats }) {
   const data = stats || { trades: 0, wins: 0, losses: 0, be: 0, winRate: 0, points: 0 };
-  const days = data.days?.length ? data.days : Array.from({ length: 7 }, (_, index) => ({ label: `Day ${index + 1}`, points: 0 }));
+  const fallbackToday = new Date();
+  fallbackToday.setHours(0, 0, 0, 0);
+  const fallbackDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(fallbackToday);
+    date.setDate(fallbackToday.getDate() - (6 - index));
+    return { label: formatJournalDay(date), points: 0 };
+  });
+  const days = data.days?.length ? data.days : fallbackDays;
   const values = days.map((day) => Number(day.points) || 0);
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 0);
@@ -5138,12 +5145,26 @@ function RollingSevenStats({ stats }) {
   const today = data.today || days[days.length - 1] || { label: "Today", points: 0 };
   const totalPointsColor = Number(data.points) < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
   const todayPointsColor = Number(today.points) < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
+  const tickerDays = [...days, ...days];
   return (
     <div className="mt-3 rounded-xl border border-[#2c2300] bg-black p-3 text-white shadow-lg shadow-black/40">
       <div className="text-[10px] font-black uppercase tracking-[0.18em]">Rolling 7 Days</div>
       <div className="mt-1 flex items-center justify-between gap-3 text-[11px] font-black text-white">
         <span>{data.rangeLabel || "Last 7 days"}</span>
         <span className="text-right">{today.label}: <span className={todayPointsColor}>{formatSignedPoints(today.points)} NQ</span></span>
+      </div>
+      <div className="mt-2 overflow-hidden rounded-lg border border-zinc-800 bg-[#090909] py-1 text-[10px] font-black uppercase tracking-[0.14em]">
+        <div className="playmaker-ticker-track whitespace-nowrap" style={{ animationDuration: "92s" }}>
+          {tickerDays.map((day, index) => {
+            const color = Number(day.points) < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
+            return (
+              <span key={`${day.label}-${index}`} className="mr-8 inline-flex gap-2">
+                <span className="text-white">{day.label}</span>
+                <span className={color}>{formatSignedPoints(day.points)} NQ</span>
+              </span>
+            );
+          })}
+        </div>
       </div>
       <div className="mt-1 text-lg font-black"><span className={totalPointsColor}>{formatSignedPoints(data.points)}</span> NQ points</div>
       <svg viewBox="0 0 120 42" className="mt-2 h-12 w-full overflow-visible rounded-lg border border-zinc-800 bg-[#090909]">
