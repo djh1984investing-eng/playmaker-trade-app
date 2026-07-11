@@ -147,11 +147,15 @@
       .text-link { display: block; border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; text-decoration: none; }
       .text-link strong { display: block; color: #ffcc19; }
       .text-link span { display: block; margin-top: 4px; color: #cfcfcf; font-size: 14px; }
+      .image-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+      figure { margin: 0; border: 1px solid #262626; border-radius: 12px; background: #090909; overflow: hidden; }
+      figure img { display: block; width: 100%; height: auto; }
+      figcaption { padding: 12px 14px; color: #cfcfcf; font-size: 13px; font-weight: 700; }
       .faq { display: grid; gap: 12px; margin-top: 16px; }
       .faq article { border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; }
       footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
       @media (max-width: 780px) {
-        .hero, .grid, .link-grid { grid-template-columns: 1fr; }
+        .hero, .grid, .link-grid, .image-grid { grid-template-columns: 1fr; }
         .nav { align-items: flex-start; flex-direction: column; }
       }
     </style>
@@ -205,6 +209,19 @@
         <p>
           PlayMaker is focused on structure for NQ futures traders studying market top and bottom trading, reversal areas, and strong confluence. It is not a promise of results, and it does not remove trading risk. The goal is to help traders slow down, compare levels, review confluence, and keep better records.
         </p>
+      </section>
+      <section class="section" aria-label="PlayMaker setup card examples">
+        <h2>PlayMaker Setup Card Examples</h2>
+        <div class="image-grid">
+          <figure>
+            <img src="/playmaker-nq-long-setup-card.png" alt="PlayMaker NQ long setup card example for futures reversal trading" loading="lazy" />
+            <figcaption>PlayMaker NQ long setup card for reviewing a futures reversal idea.</figcaption>
+          </figure>
+          <figure>
+            <img src="/nq-futures-short-reversal-setup-card.png" alt="NQ futures short reversal setup card from the PlayMaker signal board" loading="lazy" />
+            <figcaption>NQ futures short reversal setup card used for signal review.</figcaption>
+          </figure>
+        </div>
       </section>
       <section class="section" aria-label="Explore PlayMaker">
         <h2>Explore PlayMaker</h2>

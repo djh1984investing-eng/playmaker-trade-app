@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
   <url>
     <loc>https://www.futuresplaymaker.com/</loc>
     <lastmod>2026-07-10</lastmod>
@@ -8,18 +8,42 @@
   </url>
   <url>
     <loc>https://www.futuresplaymaker.com/about.html</loc>
+    <image:image>
+      <image:loc>https://www.futuresplaymaker.com/playmaker-nq-long-setup-card.png</image:loc>
+      <image:title>PlayMaker NQ Long Setup Card</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://www.futuresplaymaker.com/nq-futures-short-reversal-setup-card.png</image:loc>
+      <image:title>NQ Futures Short Reversal Setup Card</image:title>
+    </image:image>
     <lastmod>2026-07-11</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://www.futuresplaymaker.com/how-it-works.html</loc>
+    <image:image>
+      <image:loc>https://www.futuresplaymaker.com/nq-futures-long-reversal-setup-card.png</image:loc>
+      <image:title>NQ Futures Long Reversal Setup Card</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://www.futuresplaymaker.com/playmaker-short-setup-card-example.png</image:loc>
+      <image:title>PlayMaker Short Setup Card Example</image:title>
+    </image:image>
     <lastmod>2026-07-11</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://www.futuresplaymaker.com/trading-journal.html</loc>
+    <image:image>
+      <image:loc>https://www.futuresplaymaker.com/playmaker-signal-board-long-example.png</image:loc>
+      <image:title>PlayMaker Signal Board Long Example</image:title>
+    </image:image>
+    <image:image>
+      <image:loc>https://www.futuresplaymaker.com/playmaker-nq-long-setup-card.png</image:loc>
+      <image:title>NQ Futures Setup Card for Journal Review</image:title>
+    </image:image>
     <lastmod>2026-07-11</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>

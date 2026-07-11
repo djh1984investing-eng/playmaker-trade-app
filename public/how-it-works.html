@@ -82,10 +82,14 @@
       .text-link { display: block; border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; text-decoration: none; }
       .text-link strong { display: block; color: #ffcc19; }
       .text-link span { display: block; margin-top: 4px; color: #cfcfcf; font-size: 14px; }
+      .image-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+      figure { margin: 0; border: 1px solid #262626; border-radius: 12px; background: #090909; overflow: hidden; }
+      figure img { display: block; width: 100%; height: auto; }
+      figcaption { padding: 12px 14px; color: #cfcfcf; font-size: 13px; font-weight: 700; }
       .faq { display: grid; gap: 12px; margin-top: 16px; }
       .faq article { border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 16px; }
       footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
-      @media (max-width: 700px) { .nav { align-items: flex-start; flex-direction: column; } .step, .link-grid { grid-template-columns: 1fr; } }
+      @media (max-width: 700px) { .nav { align-items: flex-start; flex-direction: column; } .step, .link-grid, .image-grid { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
@@ -139,6 +143,19 @@
         <a class="button primary" href="/">Open PlayMaker</a>
         <a class="button secondary" href="/trading-journal.html">View Journal Features</a>
       </div>
+      <section class="section" aria-label="NQ setup workflow images">
+        <h2>NQ Setup Workflow Images</h2>
+        <div class="image-grid">
+          <figure>
+            <img src="/nq-futures-long-reversal-setup-card.png" alt="NQ futures long reversal setup card showing PlayMaker workflow" loading="lazy" />
+            <figcaption>NQ futures long reversal setup card inside the PlayMaker workflow.</figcaption>
+          </figure>
+          <figure>
+            <img src="/playmaker-short-setup-card-example.png" alt="PlayMaker short setup card example for market top trading review" loading="lazy" />
+            <figcaption>PlayMaker short setup card example for reviewing market top areas.</figcaption>
+          </figure>
+        </div>
+      </section>
       <section class="section" aria-label="Related PlayMaker pages">
         <h2>Related PlayMaker Pages</h2>
         <div class="link-grid">
