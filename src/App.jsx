@@ -3838,7 +3838,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
-        <RollingSevenStats stats={globalJournalStats?.rolling7} />
+        <GlobalPlaymakerStats stats={globalJournalStats} />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3950,7 +3950,7 @@ const exportJournalCSV = () => {
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
             <div className="mx-auto max-w-xl">
-              <RollingSevenStats stats={globalJournalStats?.rolling7} />
+              <GlobalPlaymakerStats stats={globalJournalStats} />
             </div>
           </div>
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
@@ -5213,6 +5213,38 @@ function Rec({ r }) {
 
 function Small({ label, value }) {
   return <div className="rounded-xl border border-zinc-800 bg-black p-3"><div className="text-xs text-zinc-500">{label}</div><div className="font-black">{value}</div></div>;
+}
+
+function GlobalPlaymakerStats({ stats }) {
+  const totalPoints = Number(stats?.totalPoints) || 0;
+  const pointsColor = totalPoints < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
+  return (
+    <div className="mt-3 rounded-xl border border-[#2c2300] bg-black p-3 text-white shadow-lg shadow-black/40">
+      <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#ffcc19]">Global PlayMaker Results</div>
+      <div className="mt-1 text-2xl font-black">
+        <span className={pointsColor}>{formatSignedPoints(totalPoints)}</span> NQ points
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+        <div className="rounded-lg border border-zinc-800 bg-[#090909] p-2">
+          <div className="text-zinc-500">Closed</div>
+          <div className="font-black">{stats.closed}</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-[#090909] p-2">
+          <div className="text-zinc-500">Win %</div>
+          <div className="font-black">{stats.winRate}%</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-[#090909] p-2">
+          <div className="text-zinc-500">Wins</div>
+          <div className="font-black text-[#00f09a]">{stats.wins}</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-[#090909] p-2">
+          <div className="text-zinc-500">Losses</div>
+          <div className="font-black text-[#ff4d4d]">{stats.losses}</div>
+        </div>
+      </div>
+      <div className="mt-2 text-xs font-black text-zinc-300">BE {stats.be} - Global journal only</div>
+    </div>
+  );
 }
 
 function JournalPointsCounter({ stats }) {
