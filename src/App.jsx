@@ -3844,7 +3844,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
-        <RollingSevenStats stats={globalJournalStats?.rolling7} title="Automatic Signal Results" />
+        <JournalPointsCounter stats={globalJournalStats} title="Automatic Signal Results" rollingTitle="Results Ticker" />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3956,7 +3956,7 @@ const exportJournalCSV = () => {
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
             <div className="mx-auto max-w-xl">
-              <RollingSevenStats stats={globalJournalStats?.rolling7} title="Automatic Signal Results" />
+              <JournalPointsCounter stats={globalJournalStats} title="Automatic Signal Results" rollingTitle="Results Ticker" />
             </div>
           </div>
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
@@ -5221,14 +5221,14 @@ function Small({ label, value }) {
   return <div className="rounded-xl border border-zinc-800 bg-black p-3"><div className="text-xs text-zinc-500">{label}</div><div className="font-black">{value}</div></div>;
 }
 
-function JournalPointsCounter({ stats }) {
+function JournalPointsCounter({ stats, title = "Journal Points Counter", rollingTitle = "Rolling 7 Days" }) {
   const totalPoints = Number(stats?.totalPoints) || 0;
   const pointsColor = totalPoints < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
   return (
     <div className="mt-4 rounded-2xl border border-[#2c2300] bg-black p-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#ffcc19]">Journal Points Counter</div>
+          <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#ffcc19]">{title}</div>
           <div className="mt-1 text-3xl font-black">
             <span className={pointsColor}>{formatSignedPoints(totalPoints)}</span> NQ points
           </div>
@@ -5244,7 +5244,7 @@ function JournalPointsCounter({ stats }) {
         <Small label="Avg Max Move" value={fmt(stats.avgMove)} />
         <Small label="Avg Drawdown" value={fmt(stats.avgDrawdown)} />
       </div>
-      <RollingSevenStats stats={stats.rolling7} />
+      <RollingSevenStats stats={stats.rolling7} title={rollingTitle} />
     </div>
   );
 }
