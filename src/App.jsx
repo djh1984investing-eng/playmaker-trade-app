@@ -196,6 +196,28 @@ const averageJournalNumber = (items, key) => {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 };
 
+const sumJournalNumber = (items, key) => {
+  return items.reduce((sum, item) => sum + (journalNumberOrNull(item?.[key]) ?? 0), 0);
+};
+
+const journalDateMs = (item) => {
+  const raw = item?.createdAt || item?.created_at || item?.date;
+  const parsed = new Date(raw).getTime();
+  if (Number.isFinite(parsed)) return parsed;
+
+  const match = String(raw || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!match) return null;
+  const [, month, day, year] = match;
+  const fallback = new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+  return Number.isFinite(fallback) ? fallback : null;
+};
+
+const formatSignedPoints = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return "+0.00";
+  return `${parsed >= 0 ? "+" : ""}${fmt(parsed)}`;
+};
+
 const isManualOrder = (item) => {
   const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
   const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
@@ -1016,6 +1038,7 @@ useEffect(() => {
         if (!error && data) {
         setJournal(data.map((row) => ({
           id: row.id || Date.now(),
+          createdAt: row.created_at || null,
           date: row.created_at ? new Date(row.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
           direction: row.direction || "",
           entry: row.entry_price || "",
@@ -2179,12 +2202,45 @@ useEffect(() => {
     const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
     const unfilled = journal.filter((j) => isOpenOrder(j)).length;
     const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
+    const totalPoints = sumJournalNumber(closed, "maxMove");
     const avgPL = averageJournalNumber(closed, "profitLoss");
     const avgMove = averageJournalNumber(closed, "maxMove");
     const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
     const avgDiscount = averageJournalNumber(closed, "discountPoints");
     const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-    return { total: journal.length, closed: closed.length, wins, losses, be, unfilled, winRate, totalPL, avgPL, avgMove, avgDrawdown, avgDiscount };
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const rollingClosed = closed.filter((j) => {
+      const tradeMs = journalDateMs(j);
+      return tradeMs !== null && tradeMs >= sevenDaysAgo;
+    });
+    const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
+    const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
+    const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
+    const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
+    const rollingPoints = sumJournalNumber(rollingClosed, "maxMove");
+    return {
+      total: journal.length,
+      closed: closed.length,
+      wins,
+      losses,
+      be,
+      unfilled,
+      winRate,
+      totalPL,
+      totalPoints,
+      avgPL,
+      avgMove,
+      avgDrawdown,
+      avgDiscount,
+      rolling7: {
+        trades: rollingClosed.length,
+        wins: rollingWins,
+        losses: rollingLosses,
+        be: rollingBe,
+        winRate: rollingWinRate,
+        points: rollingPoints
+      }
+    };
   }, [journal]);
 
   const tips = useMemo(() => {
@@ -2350,6 +2406,7 @@ const exportJournalCSV = () => {
 
     return {
       id: extra.id || selectedTrade?.id || editingId || Date.now(),
+      createdAt: extra.createdAt || new Date().toISOString(),
       date: formatEastern(new Date()),
       direction: form.direction,
       entry: form.tradeEntryPrice,
@@ -3775,6 +3832,7 @@ const exportJournalCSV = () => {
               <div className="mt-1 break-all">{user?.email || "No email"}</div>
               <button onClick={signOut} className="mt-3 rounded-lg border border-[#ffcc19] px-3 py-2 font-black text-[#ffcc19] hover:bg-[#171200]">Sign Out</button>
             </div>
+            <RollingSevenStats stats={journalStats?.rolling7} />
           </div>
         </div>
 
@@ -5004,12 +5062,25 @@ function Small({ label, value }) {
   return <div className="rounded-xl border border-zinc-800 bg-black p-3"><div className="text-xs text-zinc-500">{label}</div><div className="font-black">{value}</div></div>;
 }
 
+function RollingSevenStats({ stats }) {
+  const data = stats || { trades: 0, wins: 0, losses: 0, be: 0, winRate: 0, points: 0 };
+  return (
+    <div className="mt-3 rounded-xl border border-[#00d27a] bg-[#001a0f] p-3 text-[#00f09a] shadow-lg shadow-green-950/30">
+      <div className="text-[10px] font-black uppercase tracking-[0.18em]">Rolling 7 Days</div>
+      <div className="mt-1 text-lg font-black">{formatSignedPoints(data.points)} NQ points</div>
+      <div className="mt-1 text-xs font-black">
+        W {data.wins} / L {data.losses} / BE {data.be} • {data.winRate}% • {data.trades} trades
+      </div>
+    </div>
+  );
+}
+
 function Breakdown({ report, recommendations, tips }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-4"><Small label="Zone Score" value={`${report.zoneScore}/100`} /><Small label="Precision Grade Score" value={`${report.score}/100`} /><Small label="Top 3 Within 5" value={`${report.topWithin5}/3`} /><Small label="Far Levels 8+" value={report.farCount} /></div><div className="mt-4 rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-sm text-zinc-300">Raw points still count the reaction zone. The grade is capped by entry precision: top-weighted confluences need to align within 3–5 points for A/A+.</div><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
 }
 
 function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEntry, exportJournalCSV, form, set, editingId, handleImageUpload }) {
-  const stats = journalStats || { total: 0, closed: 0, wins: 0, losses: 0, be: 0, unfilled: 0, winRate: 0, totalPL: 0, avgPL: 0, avgMove: 0, avgDrawdown: 0, avgDiscount: 0 };
+  const stats = journalStats || { total: 0, closed: 0, wins: 0, losses: 0, be: 0, unfilled: 0, winRate: 0, totalPL: 0, totalPoints: 0, avgPL: 0, avgMove: 0, avgDrawdown: 0, avgDiscount: 0 };
 
   return (
     <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]">
@@ -5050,6 +5121,7 @@ function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEnt
           <Small label="Closed" value={stats.closed} />
           <Small label="Win %" value={`${stats.winRate}%`} />
           <Small label="Total P/L" value={fmt(stats.totalPL)} />
+          <Small label="Total Points" value={`${formatSignedPoints(stats.totalPoints)} NQ`} />
           <Small label="Wins" value={stats.wins} />
           <Small label="Losses" value={stats.losses} />
           <Small label="BE" value={stats.be} />
