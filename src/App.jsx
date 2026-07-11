@@ -600,13 +600,8 @@ useEffect(() => {
       const scope = String(row.verification?.journalScope || row.verification?.scope || "").toLowerCase();
       const notes = String(row.notes || "").toLowerCase();
       const completed = isCompletedTradeResult({ result: row.result });
-      const automaticSignal = !notes.includes("manual trade:") && (
-        notes.includes("ai signal:") ||
-        Boolean(row.signal_id) ||
-        (Array.isArray(row.confluences) && row.confluences.length > 0)
-      );
-      const legacyRecreatedGlobal = !scope && notes.includes("manual trade:") && (Boolean(row.signal_id) || (Array.isArray(row.confluences) && row.confluences.length > 0));
-      return completed && scope !== "local" && (scope === "global" || automaticSignal || legacyRecreatedGlobal);
+      const legacyGlobal = !scope && !notes.includes("local journal");
+      return completed && scope !== "local" && (scope === "global" || legacyGlobal);
     });
 
     setGlobalJournal(globalRows.map((row) => ({
