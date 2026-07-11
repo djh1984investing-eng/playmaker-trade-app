@@ -240,6 +240,91 @@ const formatSignedPoints = (value) => {
   return `${parsed >= 0 ? "+" : ""}${fmt(parsed)}`;
 };
 
+const journalScopeOf = (item) => {
+  return String(item?.journalScope || item?.verification?.journalScope || item?.verification?.scope || "").toLowerCase();
+};
+
+const calculateJournalStats = (items = []) => {
+  const closed = items.filter((j) => isCompletedTradeResult(j));
+  const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
+  const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
+  const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
+  const unfilled = items.filter((j) => isOpenOrder(j)).length;
+  const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
+  const totalPoints = sumJournalNetPoints(closed);
+  const avgPL = averageJournalNumber(closed, "profitLoss");
+  const avgMove = averageJournalNumber(closed, "maxMove");
+  const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
+  const avgDiscount = averageJournalNumber(closed, "discountPoints");
+  const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const rollingClosed = closed.filter((j) => {
+    const tradeMs = journalDateMs(j);
+    return tradeMs !== null && tradeMs >= sevenDaysAgo;
+  });
+  const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
+  const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
+  const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
+  const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
+  const rollingPoints = sumJournalNetPoints(rollingClosed);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const rollingDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - index));
+    return {
+      key: journalDayKey(date),
+      label: formatJournalDay(date),
+      points: 0,
+      wins: 0,
+      losses: 0,
+      be: 0,
+      trades: 0
+    };
+  });
+  const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
+  rollingClosed.forEach((trade) => {
+    const tradeMs = journalDateMs(trade);
+    if (tradeMs === null) return;
+    const tradeDate = new Date(tradeMs);
+    tradeDate.setHours(0, 0, 0, 0);
+    const day = dayMap.get(journalDayKey(tradeDate));
+    if (!day) return;
+    const result = normalizeStatus(trade.result);
+    day.points += journalNetPoints(trade);
+    day.trades += 1;
+    if (result === "win") day.wins += 1;
+    if (result === "loss") day.losses += 1;
+    if (result === "be") day.be += 1;
+  });
+  return {
+    total: items.length,
+    closed: closed.length,
+    wins,
+    losses,
+    be,
+    unfilled,
+    winRate,
+    totalPL,
+    totalPoints,
+    avgPL,
+    avgMove,
+    avgDrawdown,
+    avgDiscount,
+    rolling7: {
+      trades: rollingClosed.length,
+      wins: rollingWins,
+      losses: rollingLosses,
+      be: rollingBe,
+      winRate: rollingWinRate,
+      points: rollingPoints,
+      days: rollingDays,
+      rangeLabel: `${rollingDays[0]?.label || ""} - ${rollingDays[6]?.label || ""}`,
+      today: rollingDays[6]
+    }
+  };
+};
+
 const isManualOrder = (item) => {
   const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
   const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
@@ -448,6 +533,7 @@ const getDefaultForm = () => ({
 export default function PlaymakerSetupGrader() {
   const [tab, setTab] = useState("checklist");
   const [journal, setJournal] = useState([]);
+  const [globalJournal, setGlobalJournal] = useState([]);
 
   const [user, setUser] = useState(null);
 const [authEmail, setAuthEmail] = useState("");
@@ -494,6 +580,36 @@ useEffect(() => {
   );
 
   return () => subscription?.unsubscribe();
+}, []);
+
+useEffect(() => {
+  const fetchGlobalJournal = async () => {
+    const { data, error } = await supabase
+      .from("trade_journal")
+      .select("created_at,result,max_move,max_drawdown,profit_loss,verification")
+      .eq("verification->>journalScope", "global")
+      .in("result", ["Win", "Loss", "BE"])
+      .order("created_at", { ascending: false })
+      .limit(250);
+
+    if (error) {
+      console.error("Global journal stats fetch error:", error);
+      setGlobalJournal([]);
+      return;
+    }
+
+    setGlobalJournal((data || []).map((row) => ({
+      createdAt: row.created_at || null,
+      result: row.result || "",
+      maxMove: row.max_move ?? "",
+      maxDrawdown: row.max_drawdown ?? "",
+      profitLoss: row.profit_loss ?? "",
+      verification: row.verification || null,
+      journalScope: row.verification?.journalScope || ""
+    })));
+  };
+
+  fetchGlobalJournal();
 }, []);
   const [aiSignals, setAiSignals] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
@@ -1079,6 +1195,7 @@ useEffect(() => {
           top: Array.isArray(row.confluences) ? row.confluences.map((r) => r.name).join(", ") : "",
           signal_id: row.signal_id || row.ai_signal_id || "",
           verification: row.verification || null,
+          journalScope: row.verification?.journalScope || row.verification?.scope || "",
           sourceType: row.notes?.includes("AI Signal:") ? "AI Signal" : "Manual Order",
           evidence: Array.isArray(row.confluences) ? row.confluences : [],
           formSnapshot: row.confluences ? { evidence: row.confluences } : null
@@ -2217,86 +2334,8 @@ useEffect(() => {
     return { score, wins, losses, be, total: closed.length };
   }, [journal]);
 
-  const journalStats = useMemo(() => {
-    const closed = journal.filter((j) => isCompletedTradeResult(j));
-    const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
-    const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
-    const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
-    const unfilled = journal.filter((j) => isOpenOrder(j)).length;
-    const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
-    const totalPoints = sumJournalNetPoints(closed);
-    const avgPL = averageJournalNumber(closed, "profitLoss");
-    const avgMove = averageJournalNumber(closed, "maxMove");
-    const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
-    const avgDiscount = averageJournalNumber(closed, "discountPoints");
-    const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const rollingClosed = closed.filter((j) => {
-      const tradeMs = journalDateMs(j);
-      return tradeMs !== null && tradeMs >= sevenDaysAgo;
-    });
-    const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
-    const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
-    const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
-    const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
-    const rollingPoints = sumJournalNetPoints(rollingClosed);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const rollingDays = Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(today);
-      date.setDate(today.getDate() - (6 - index));
-      return {
-        key: journalDayKey(date),
-        label: formatJournalDay(date),
-        points: 0,
-        wins: 0,
-        losses: 0,
-        be: 0,
-        trades: 0
-      };
-    });
-    const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
-    rollingClosed.forEach((trade) => {
-      const tradeMs = journalDateMs(trade);
-      if (tradeMs === null) return;
-      const tradeDate = new Date(tradeMs);
-      tradeDate.setHours(0, 0, 0, 0);
-      const day = dayMap.get(journalDayKey(tradeDate));
-      if (!day) return;
-      const result = normalizeStatus(trade.result);
-      day.points += journalNetPoints(trade);
-      day.trades += 1;
-      if (result === "win") day.wins += 1;
-      if (result === "loss") day.losses += 1;
-      if (result === "be") day.be += 1;
-    });
-    return {
-      total: journal.length,
-      closed: closed.length,
-      wins,
-      losses,
-      be,
-      unfilled,
-      winRate,
-      totalPL,
-      totalPoints,
-      avgPL,
-      avgMove,
-      avgDrawdown,
-      avgDiscount,
-      rolling7: {
-        trades: rollingClosed.length,
-        wins: rollingWins,
-        losses: rollingLosses,
-        be: rollingBe,
-        winRate: rollingWinRate,
-        points: rollingPoints,
-        days: rollingDays,
-        rangeLabel: `${rollingDays[0]?.label || ""} - ${rollingDays[6]?.label || ""}`,
-        today: rollingDays[6]
-      }
-    };
-  }, [journal]);
+  const journalStats = useMemo(() => calculateJournalStats(journal), [journal]);
+  const globalJournalStats = useMemo(() => calculateJournalStats(globalJournal), [globalJournal]);
 
   const tips = useMemo(() => {
     const t = [];
@@ -2481,6 +2520,7 @@ const exportJournalCSV = () => {
       sourceType,
       signal_id: extra.signal_id || selectedTrade?.signal_id || aiPayload?.id || "",
       verification: selectedTrade?.verification || verifiedAnchors[anchorVerificationKey(selectedTrade)] || null,
+      journalScope: extra.journalScope || selectedTrade?.journalScope || journalScopeOf(selectedTrade),
       signalName,
       evidence: aiEvidence,
       rawSignal: aiPayload,
@@ -2488,7 +2528,13 @@ const exportJournalCSV = () => {
     };
   };
 
-  const tradePayload = (item) => ({
+  const tradePayload = (item) => {
+    const journalScope = journalScopeOf(item);
+    const verificationPayload = item.verification || journalScope
+      ? { ...(item.verification || {}), ...(journalScope ? { journalScope } : {}) }
+      : null;
+
+    return {
     user_id: user.id,
     symbol: "NQ",
     direction: item.direction,
@@ -2504,9 +2550,10 @@ const exportJournalCSV = () => {
     notes: item.notes,
     confluences: item.evidence?.length ? item.evidence : report.active,
     recommendations,
-    verification: item.verification || null,
+    verification: verificationPayload,
     screenshots: item.tradeImages || []
-  });
+    };
+  };
 
   const clearTradeForm = () => {
     const next = getDefaultForm();
@@ -3277,7 +3324,8 @@ const exportJournalCSV = () => {
       top: anchor.top || signalName,
       sourceType: anchor.sourceType || "AI Signal",
       signal_id: anchor.signal_id || payload.id || "",
-      verification,
+      verification: { ...(verification || {}), journalScope: scope },
+      journalScope: scope,
       signalName,
       evidence: anchor.evidence || payload.evidence || [],
       rawSignal: payload,
@@ -3790,7 +3838,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
-        <RollingSevenStats stats={journalStats?.rolling7} />
+        <RollingSevenStats stats={globalJournalStats?.rolling7} />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3902,7 +3950,7 @@ const exportJournalCSV = () => {
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
             <div className="mx-auto max-w-xl">
-              <RollingSevenStats stats={journalStats?.rolling7} />
+              <RollingSevenStats stats={globalJournalStats?.rolling7} />
             </div>
           </div>
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
