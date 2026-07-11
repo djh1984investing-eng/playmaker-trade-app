@@ -43,24 +43,50 @@
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "Playmaker",
-        "applicationCategory": "FinanceApplication",
-        "operatingSystem": "Web",
-        "description": "PlayMaker is a futures market trading app for NQ signal tracking, manual trade grading, limit order management, and trade journaling with a focused workflow.",
-        "sameAs": [
-          "https://www.youtube.com/@TRADESWITHYOU",
-          "https://www.facebook.com/profile.php?id=61591225798882",
-          "https://www.facebook.com/profile.php?id=61578057606369",
-          "https://www.tiktok.com/@mr.djharrison",
-          "https://discord.com/channels/796158482431737906",
-          "https://whop.com/checkout/plan_wQepCbh0j806f"
-        ],
-        "offers": {
-          "@type": "Offer",
-          "url": "https://whop.com/checkout/plan_wQepCbh0j806f",
-          "availability": "https://schema.org/InStock"
-        }
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://www.futuresplaymaker.com/#organization",
+            "name": "PlayMaker",
+            "url": "https://www.futuresplaymaker.com/",
+            "logo": "https://www.futuresplaymaker.com/icon-512.png",
+            "sameAs": [
+              "https://www.youtube.com/@TRADESWITHYOU",
+              "https://www.facebook.com/profile.php?id=61591225798882",
+              "https://www.facebook.com/profile.php?id=61578057606369",
+              "https://www.tiktok.com/@mr.djharrison",
+              "https://discord.com/channels/796158482431737906",
+              "https://whop.com/checkout/plan_wQepCbh0j806f"
+            ]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://www.futuresplaymaker.com/#website",
+            "name": "PlayMaker",
+            "url": "https://www.futuresplaymaker.com/",
+            "publisher": {
+              "@id": "https://www.futuresplaymaker.com/#organization"
+            },
+            "description": "PlayMaker is a futures market trading app for NQ signal tracking, manual trade grading, limit order management, and trade journaling."
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://www.futuresplaymaker.com/#software",
+            "name": "PlayMaker Futures Trading App",
+            "url": "https://www.futuresplaymaker.com/",
+            "applicationCategory": "FinanceApplication",
+            "operatingSystem": "Web",
+            "description": "PlayMaker is a futures market trading app for NQ signal tracking, manual trade grading, limit order management, and trade journaling with a focused workflow.",
+            "publisher": {
+              "@id": "https://www.futuresplaymaker.com/#organization"
+            },
+            "offers": {
+              "@type": "Offer",
+              "url": "https://whop.com/checkout/plan_wQepCbh0j806f",
+              "availability": "https://schema.org/InStock"
+            }
+          }
+        ]
       }
     </script>
     <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18068394381"></script>
