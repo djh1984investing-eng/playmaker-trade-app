@@ -3845,7 +3845,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
-        <RollingSevenStats stats={automaticSignalStats?.rolling7} title="Automatic Signal Results" />
+        <AutomaticSignalResults stats={automaticSignalStats} />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3891,6 +3891,7 @@ const exportJournalCSV = () => {
           <p className="mt-3 text-zinc-300">{accessMessage}</p>
           <p className="mt-2 text-sm text-zinc-500">Use the same email you purchased with on Whop.</p>
           <PlaymakerPromoTicker />
+          <AutomaticSignalResults stats={automaticSignalStats} />
           <a
             href={WHOP_CHECKOUT_URL}
             target="_blank"
@@ -3957,7 +3958,7 @@ const exportJournalCSV = () => {
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
             <div className="mx-auto max-w-xl">
-              <RollingSevenStats stats={automaticSignalStats?.rolling7} title="Automatic Signal Results" />
+              <AutomaticSignalResults stats={automaticSignalStats} />
             </div>
           </div>
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
@@ -5220,6 +5221,10 @@ function Rec({ r }) {
 
 function Small({ label, value }) {
   return <div className="rounded-xl border border-zinc-800 bg-black p-3"><div className="text-xs text-zinc-500">{label}</div><div className="font-black">{value}</div></div>;
+}
+
+function AutomaticSignalResults({ stats }) {
+  return <RollingSevenStats stats={stats?.rolling7} title="Automatic Signal Results" />;
 }
 
 function JournalPointsCounter({ stats }) {
