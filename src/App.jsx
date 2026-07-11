@@ -3843,7 +3843,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
-        <RollingSevenStats stats={globalJournalStats?.rolling7} title="Global PlayMaker Results" />
+        <RollingSevenStats stats={globalJournalStats?.rolling7} title="PlayMaker Results" />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3955,7 +3955,7 @@ const exportJournalCSV = () => {
             <h1 className="text-5xl md:text-6xl font-black leading-none">Setup Grader</h1>
             <p className="mt-3 text-xl text-zinc-300">Starting-level scoring, distance compression, weighted confluences, behavior review, and trade journal.</p>
             <div className="mx-auto max-w-xl">
-              <RollingSevenStats stats={globalJournalStats?.rolling7} title="Global PlayMaker Results" />
+              <RollingSevenStats stats={globalJournalStats?.rolling7} title="PlayMaker Results" />
             </div>
           </div>
           <div className="rounded-3xl border border-[#2c2300] bg-black p-4 shadow-xl shadow-black/50">
