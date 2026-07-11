@@ -3057,6 +3057,7 @@ const exportJournalCSV = () => {
   const markAnchorFilled = async (anchor) => {
     if (!anchor) return;
     const key = anchorBaseKey(anchor);
+    const isManualFilledAnchor = isManualOrder(anchor);
     const entryValue = anchor.entry ?? anchor.price ?? anchor.rawSignal?.entry ?? anchor.rawSignal?.price ?? "";
     const directionValue = anchor.direction || anchor.rawSignal?.direction || "Both";
     const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} • marked filled • stays on board until journaled • ${formatEastern(new Date())}`;
@@ -3075,7 +3076,7 @@ const exportJournalCSV = () => {
       pendingOrder: true,
       filledLocked: true,
       filledAt: new Date().toISOString(),
-      sourceType: anchor.sourceType || "AI Signal",
+      sourceType: anchor.sourceType || (isManualFilledAnchor ? "Manual Order" : "AI Signal"),
       rawSignal: anchor.rawSignal || anchor.payload || {},
       evidence: anchor.evidence || anchor.rawSignal?.evidence || anchor.payload?.evidence || []
     };
@@ -3090,16 +3091,20 @@ const exportJournalCSV = () => {
       ...prev,
       [key]: filledRecord
     }));
-    await saveFilledBoardState(key, filledRecord);
+    if (!isManualFilledAnchor) {
+      await saveFilledBoardState(key, filledRecord);
+    }
     setNotificationLog((prev) => [{
       key: `FILLED-${key}-${Date.now()}`,
       kind: "FILLED",
-      title: "Playmaker setup filled",
+      title: isManualFilledAnchor ? "Manual trade moved to managing" : "Playmaker setup filled",
       detail,
       createdAt: new Date().toISOString()
     }, ...prev].slice(0, 50));
-    notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
-    sendDiscordBoardNotice({ event: "FILLED", title: "Playmaker Signal Filled", detail, anchor: anchorSnapshot });
+    if (!isManualFilledAnchor) {
+      notifyPlaymaker("Playmaker setup filled", detail, "play maker setup filled");
+      sendDiscordBoardNotice({ event: "FILLED", title: "Playmaker Signal Filled", detail, anchor: anchorSnapshot });
+    }
   };
 
   const dismissAnchorFromBoard = async (anchor) => {
@@ -3245,15 +3250,21 @@ const exportJournalCSV = () => {
     const payload = anchor.rawSignal || anchor.payload || {};
     const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
     const directionValue = anchor.direction || payload.direction || "Both";
-    const signalName = anchor.signalName || payload.signal || "AI Level";
+    const isManualSubmit = isManualOrder(anchor);
+    const signalName = anchor.signalName || payload.signal || (isManualSubmit ? "Manual Trade" : "AI Level");
     const verification = getAnchorVerification(anchor);
+    const submitNotes = isManualSubmit
+      ? `Manual Trade: ${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)}`
+      : (verification?.ownerNote
+        ? `AI Signal: ${signalName} - Owner Note: ${verification.ownerNote}`
+        : `AI Signal: ${signalName}`);
 
     const item = {
       id: `reported-${anchor.id || Date.now()}`,
       date: formatEastern(new Date()),
       direction: directionValue,
       entry: entryValue,
-      grade: anchor.grade || payload.ai_grade || "AI",
+      grade: anchor.grade || payload.ai_grade || (isManualSubmit ? "Manual" : "AI"),
       score: anchor.score || payload.ai_score || payload.zone_score || 0,
       result: "Reported",
       orderStatus: "Reported",
@@ -3261,9 +3272,7 @@ const exportJournalCSV = () => {
       maxMove: "",
       maxDrawdown: "",
       profitLoss: "",
-      notes: verification?.ownerNote
-        ? `AI Signal: ${signalName} — Owner Note: ${verification.ownerNote}`
-        : `AI Signal: ${signalName}`,
+      notes: submitNotes,
       tradeImages: [],
       top: anchor.top || signalName,
       sourceType: anchor.sourceType || "AI Signal",
@@ -3412,17 +3421,24 @@ const exportJournalCSV = () => {
   const manualUnfilledOrders = unfilledOrders.filter((order) => isManualOrder(order));
   const signalUnfilledOrders = unfilledOrders.filter((order) => !isManualOrder(order));
 
-  const boardUnfilledOrders = [
-    ...manualUnfilledOrders,
-    ...(ownerMode ? signalUnfilledOrders : [])
-  ]
+  const manualManagingOrders = manualUnfilledOrders
+    .filter((order) => !submittedRecordForAnchor(order))
+    .filter((order) => !pulledRecordForAnchor(order))
+    .map((order) => ({
+      ...order,
+      sourceType: order.sourceType || "Manual Order",
+      orderStatus: order.orderStatus === "Unfilled" ? "Filled - Journal Needed" : order.orderStatus,
+      filledLocked: true,
+      filledAt: order.filledAt || order.createdAt || order.date || new Date().toISOString()
+    }));
+
+  const boardUnfilledOrders = (ownerMode ? signalUnfilledOrders : [])
     .filter((order) => !submittedRecordForAnchor(order))
     .filter((order) => !pulledRecordForAnchor(order));
 
   const filledPinnedAnchors = Object.values(filledAnchorKeys)
     .map((record) => record?.anchorSnapshot)
     .filter(Boolean)
-    .filter((anchor) => !isManualOrder(anchor))
     .filter((anchor) => !submittedRecordForAnchor(anchor))
     .filter((anchor) => !pulledRecordForAnchor(anchor));
 
@@ -3444,7 +3460,6 @@ const exportJournalCSV = () => {
   };
 
   const isInLatestMarketRange = (anchor) => {
-    if (isManualOrder(anchor)) return true;
     const distance = anchor.boardDistance ?? anchor.triggerDistance ?? anchorMarketDistance(anchor);
     return distance === null || distance <= maxOrderCardDistancePoints;
   };
@@ -3610,8 +3625,16 @@ const exportJournalCSV = () => {
   const tradeAnchorLevels = aiAnchorsOnly.filter((anchor) => ["A+", "A"].includes(anchor.grade));
   const intermediateWatchlist = aiAnchorsOnly.filter((anchor) => ["B+", "B"].includes(anchor.grade));
   const watchLevels = aiAnchorsOnly.filter((anchor) => anchor.grade === "C");
-  const filledManagingLevels = filledPinnedAnchors
+  const filledManagingLevels = [
+    ...manualManagingOrders,
+    ...filledPinnedAnchors
+  ]
     .filter((anchor) => !submittedRecordForAnchor(anchor))
+    .reduce((acc, anchor) => {
+      const key = anchorBaseKey(anchor);
+      if (!acc.some((item) => anchorBaseKey(item) === key)) acc.push(anchor);
+      return acc;
+    }, [])
     .sort((a, b) => new Date(b.filledAt || b.updatedAt || b.date || 0).getTime() - new Date(a.filledAt || a.updatedAt || a.date || 0).getTime());
 
   useEffect(() => {
@@ -4769,7 +4792,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
         )}
         {!isPulled && (
           <>
-        {ownerMode && !isFilledMode && (
+        {(ownerMode || !isAi) && !isFilledMode && (
         <button
           onClick={() => onMarkFilled?.(anchor)}
           className="w-full rounded-lg border border-[#00d27a] px-3 py-2 text-xs font-black text-[#00d27a] hover:bg-[#001a0f]"
