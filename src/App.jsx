@@ -586,7 +586,7 @@ useEffect(() => {
   const fetchGlobalJournal = async () => {
     const { data, error } = await supabase
       .from("trade_journal")
-      .select("created_at,result,max_move,max_drawdown,profit_loss,verification,notes,signal_id,confluences")
+      .select("id,created_at,result,max_move,max_drawdown,profit_loss,verification,notes,signal_id,confluences")
       .order("created_at", { ascending: false })
       .limit(250);
 
@@ -605,6 +605,7 @@ useEffect(() => {
     });
 
     setGlobalJournal(globalRows.map((row) => ({
+      id: row.id || "",
       createdAt: row.created_at || null,
       result: row.result || "",
       maxMove: row.max_move ?? "",
@@ -2342,7 +2343,16 @@ useEffect(() => {
 
   const journalStats = useMemo(() => calculateJournalStats(journal), [journal]);
   const globalJournalStats = useMemo(() => calculateJournalStats(globalJournal), [globalJournal]);
-  const automaticSignalStats = globalJournalStats.closed > 0 ? globalJournalStats : journalStats;
+  const automaticSignalStats = useMemo(() => {
+    const seen = new Set();
+    const merged = [...globalJournal, ...journal].filter((item) => {
+      const key = String(item.id || `${item.createdAt || item.date}|${item.result}|${item.maxMove}|${item.maxDrawdown}|${item.profitLoss}`);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return calculateJournalStats(merged);
+  }, [globalJournal, journal]);
 
   const tips = useMemo(() => {
     const t = [];
