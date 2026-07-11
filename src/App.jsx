@@ -3409,13 +3409,15 @@ const exportJournalCSV = () => {
   const displayScore = selectedTrade?.sourceType === "AI Signal" && selectedAiScore ? selectedAiScore : report.score;
   const displayPrecision = selectedTrade?.sourceType === "AI Signal" && selectedAiPrecision ? selectedAiPrecision : report.score;
   const unfilledOrders = journal.filter((j) => isOpenOrder(j));
+  const manualUnfilledOrders = unfilledOrders.filter((order) => isManualOrder(order));
   const signalUnfilledOrders = unfilledOrders.filter((order) => !isManualOrder(order));
 
-  const boardUnfilledOrders = ownerMode
-    ? signalUnfilledOrders
-      .filter((order) => !submittedRecordForAnchor(order))
-      .filter((order) => !pulledRecordForAnchor(order))
-    : [];
+  const boardUnfilledOrders = [
+    ...manualUnfilledOrders,
+    ...(ownerMode ? signalUnfilledOrders : [])
+  ]
+    .filter((order) => !submittedRecordForAnchor(order))
+    .filter((order) => !pulledRecordForAnchor(order));
 
   const filledPinnedAnchors = Object.values(filledAnchorKeys)
     .map((record) => record?.anchorSnapshot)
@@ -3442,6 +3444,7 @@ const exportJournalCSV = () => {
   };
 
   const isInLatestMarketRange = (anchor) => {
+    if (isManualOrder(anchor)) return true;
     const distance = anchor.boardDistance ?? anchor.triggerDistance ?? anchorMarketDistance(anchor);
     return distance === null || distance <= maxOrderCardDistancePoints;
   };
