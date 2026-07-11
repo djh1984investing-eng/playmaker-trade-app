@@ -605,7 +605,8 @@ useEffect(() => {
         Boolean(row.signal_id) ||
         (Array.isArray(row.confluences) && row.confluences.length > 0)
       );
-      return completed && scope !== "local" && (scope === "global" || automaticSignal);
+      const legacyRecreatedGlobal = !scope && notes.includes("manual trade:") && (Boolean(row.signal_id) || (Array.isArray(row.confluences) && row.confluences.length > 0));
+      return completed && scope !== "local" && (scope === "global" || automaticSignal || legacyRecreatedGlobal);
     });
 
     setGlobalJournal(globalRows.map((row) => ({
