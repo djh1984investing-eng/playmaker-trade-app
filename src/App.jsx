@@ -240,6 +240,87 @@ const formatSignedPoints = (value) => {
   return `${parsed >= 0 ? "+" : ""}${fmt(parsed)}`;
 };
 
+const calculateJournalStats = (items = []) => {
+  const closed = items.filter((j) => isCompletedTradeResult(j));
+  const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
+  const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
+  const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
+  const unfilled = items.filter((j) => isOpenOrder(j)).length;
+  const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
+  const totalPoints = sumJournalNetPoints(closed);
+  const avgPL = averageJournalNumber(closed, "profitLoss");
+  const avgMove = averageJournalNumber(closed, "maxMove");
+  const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
+  const avgDiscount = averageJournalNumber(closed, "discountPoints");
+  const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const rollingClosed = closed.filter((j) => {
+    const tradeMs = journalDateMs(j);
+    return tradeMs !== null && tradeMs >= sevenDaysAgo;
+  });
+  const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
+  const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
+  const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
+  const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
+  const rollingPoints = sumJournalNetPoints(rollingClosed);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const rollingDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - index));
+    return {
+      key: journalDayKey(date),
+      label: formatJournalDay(date),
+      points: 0,
+      wins: 0,
+      losses: 0,
+      be: 0,
+      trades: 0
+    };
+  });
+  const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
+  rollingClosed.forEach((trade) => {
+    const tradeMs = journalDateMs(trade);
+    if (tradeMs === null) return;
+    const tradeDate = new Date(tradeMs);
+    tradeDate.setHours(0, 0, 0, 0);
+    const day = dayMap.get(journalDayKey(tradeDate));
+    if (!day) return;
+    const result = normalizeStatus(trade.result);
+    day.points += journalNetPoints(trade);
+    day.trades += 1;
+    if (result === "win") day.wins += 1;
+    if (result === "loss") day.losses += 1;
+    if (result === "be") day.be += 1;
+  });
+  return {
+    total: items.length,
+    closed: closed.length,
+    wins,
+    losses,
+    be,
+    unfilled,
+    winRate,
+    totalPL,
+    totalPoints,
+    avgPL,
+    avgMove,
+    avgDrawdown,
+    avgDiscount,
+    rolling7: {
+      trades: rollingClosed.length,
+      wins: rollingWins,
+      losses: rollingLosses,
+      be: rollingBe,
+      winRate: rollingWinRate,
+      points: rollingPoints,
+      days: rollingDays,
+      rangeLabel: `${rollingDays[0]?.label || ""} - ${rollingDays[6]?.label || ""}`,
+      today: rollingDays[6]
+    }
+  };
+};
+
 const isManualOrder = (item) => {
   const sourceType = String(item?.sourceType || item?.source_type || item?.rawSignal?.sourceType || item?.payload?.sourceType || "").toLowerCase();
   const signalName = String(item?.signalName || item?.rawSignal?.signal || item?.payload?.signal || "").toLowerCase();
@@ -448,6 +529,7 @@ const getDefaultForm = () => ({
 export default function PlaymakerSetupGrader() {
   const [tab, setTab] = useState("checklist");
   const [journal, setJournal] = useState([]);
+  const [publicJournal, setPublicJournal] = useState([]);
 
   const [user, setUser] = useState(null);
 const [authEmail, setAuthEmail] = useState("");
@@ -494,6 +576,33 @@ useEffect(() => {
   );
 
   return () => subscription?.unsubscribe();
+}, []);
+
+useEffect(() => {
+  const fetchPublicJournalStats = async () => {
+    const { data, error } = await supabase
+      .from("trade_journal")
+      .select("created_at,result,max_move,max_drawdown,profit_loss")
+      .in("result", ["Win", "Loss", "BE"])
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (error) {
+      console.error("Public journal stats fetch error:", error);
+      setPublicJournal([]);
+      return;
+    }
+
+    setPublicJournal((data || []).map((row) => ({
+      createdAt: row.created_at || null,
+      result: row.result || "",
+      maxMove: row.max_move ?? "",
+      maxDrawdown: row.max_drawdown ?? "",
+      profitLoss: row.profit_loss ?? ""
+    })));
+  };
+
+  fetchPublicJournalStats();
 }, []);
   const [aiSignals, setAiSignals] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
@@ -2217,86 +2326,9 @@ useEffect(() => {
     return { score, wins, losses, be, total: closed.length };
   }, [journal]);
 
-  const journalStats = useMemo(() => {
-    const closed = journal.filter((j) => isCompletedTradeResult(j));
-    const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
-    const losses = closed.filter((j) => normalizeStatus(j.result) === "loss").length;
-    const be = closed.filter((j) => normalizeStatus(j.result) === "be").length;
-    const unfilled = journal.filter((j) => isOpenOrder(j)).length;
-    const totalPL = closed.reduce((sum, j) => sum + (journalNumberOrNull(j.profitLoss) ?? 0), 0);
-    const totalPoints = sumJournalNetPoints(closed);
-    const avgPL = averageJournalNumber(closed, "profitLoss");
-    const avgMove = averageJournalNumber(closed, "maxMove");
-    const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
-    const avgDiscount = averageJournalNumber(closed, "discountPoints");
-    const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const rollingClosed = closed.filter((j) => {
-      const tradeMs = journalDateMs(j);
-      return tradeMs !== null && tradeMs >= sevenDaysAgo;
-    });
-    const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
-    const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
-    const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
-    const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
-    const rollingPoints = sumJournalNetPoints(rollingClosed);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const rollingDays = Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(today);
-      date.setDate(today.getDate() - (6 - index));
-      return {
-        key: journalDayKey(date),
-        label: formatJournalDay(date),
-        points: 0,
-        wins: 0,
-        losses: 0,
-        be: 0,
-        trades: 0
-      };
-    });
-    const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
-    rollingClosed.forEach((trade) => {
-      const tradeMs = journalDateMs(trade);
-      if (tradeMs === null) return;
-      const tradeDate = new Date(tradeMs);
-      tradeDate.setHours(0, 0, 0, 0);
-      const day = dayMap.get(journalDayKey(tradeDate));
-      if (!day) return;
-      const result = normalizeStatus(trade.result);
-      day.points += journalNetPoints(trade);
-      day.trades += 1;
-      if (result === "win") day.wins += 1;
-      if (result === "loss") day.losses += 1;
-      if (result === "be") day.be += 1;
-    });
-    return {
-      total: journal.length,
-      closed: closed.length,
-      wins,
-      losses,
-      be,
-      unfilled,
-      winRate,
-      totalPL,
-      totalPoints,
-      avgPL,
-      avgMove,
-      avgDrawdown,
-      avgDiscount,
-      rolling7: {
-        trades: rollingClosed.length,
-        wins: rollingWins,
-        losses: rollingLosses,
-        be: rollingBe,
-        winRate: rollingWinRate,
-        points: rollingPoints,
-        days: rollingDays,
-        rangeLabel: `${rollingDays[0]?.label || ""} - ${rollingDays[6]?.label || ""}`,
-        today: rollingDays[6]
-      }
-    };
-  }, [journal]);
+  const journalStats = useMemo(() => calculateJournalStats(journal), [journal]);
+  const publicJournalStats = useMemo(() => calculateJournalStats(publicJournal), [publicJournal]);
+  const frontPageStats = user ? journalStats : publicJournalStats;
 
   const tips = useMemo(() => {
     const t = [];
@@ -3790,7 +3822,7 @@ const exportJournalCSV = () => {
         </p>
 
         <PlaymakerPromoTicker />
-        <RollingSevenStats stats={journalStats?.rolling7} />
+        <JournalPointsCounter stats={frontPageStats} compact />
 
         <div className="mt-5 rounded-xl border border-[#2c2300] bg-black p-4 text-sm text-zinc-300">
           <div className="font-black text-[#ffcc19]">Need access?</div>
@@ -3836,6 +3868,7 @@ const exportJournalCSV = () => {
           <p className="mt-3 text-zinc-300">{accessMessage}</p>
           <p className="mt-2 text-sm text-zinc-500">Use the same email you purchased with on Whop.</p>
           <PlaymakerPromoTicker />
+          <JournalPointsCounter stats={frontPageStats} compact />
           <a
             href={WHOP_CHECKOUT_URL}
             target="_blank"
@@ -5167,7 +5200,7 @@ function Small({ label, value }) {
   return <div className="rounded-xl border border-zinc-800 bg-black p-3"><div className="text-xs text-zinc-500">{label}</div><div className="font-black">{value}</div></div>;
 }
 
-function JournalPointsCounter({ stats }) {
+function JournalPointsCounter({ stats, compact = false }) {
   const totalPoints = Number(stats?.totalPoints) || 0;
   const pointsColor = totalPoints < 0 ? "text-[#ff4d4d]" : "text-[#00f09a]";
   return (
@@ -5175,7 +5208,7 @@ function JournalPointsCounter({ stats }) {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <div className="text-[10px] font-black uppercase tracking-[0.18em] text-[#ffcc19]">Journal Points Counter</div>
-          <div className="mt-1 text-3xl font-black">
+          <div className={`mt-1 font-black ${compact ? "text-2xl" : "text-3xl"}`}>
             <span className={pointsColor}>{formatSignedPoints(totalPoints)}</span> NQ points
           </div>
         </div>
@@ -5184,12 +5217,14 @@ function JournalPointsCounter({ stats }) {
           {stats.winRate}% win rate - {stats.closed} closed
         </div>
       </div>
-      <div className="mt-3 grid gap-3 md:grid-cols-4">
-        <Small label="Total Trades" value={stats.total} />
-        <Small label="Unfilled" value={stats.unfilled} />
-        <Small label="Avg Max Move" value={fmt(stats.avgMove)} />
-        <Small label="Avg Drawdown" value={fmt(stats.avgDrawdown)} />
-      </div>
+      {!compact && (
+        <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <Small label="Total Trades" value={stats.total} />
+          <Small label="Unfilled" value={stats.unfilled} />
+          <Small label="Avg Max Move" value={fmt(stats.avgMove)} />
+          <Small label="Avg Drawdown" value={fmt(stats.avgDrawdown)} />
+        </div>
+      )}
       <RollingSevenStats stats={stats.rolling7} />
     </div>
   );
