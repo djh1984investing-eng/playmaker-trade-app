@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PlayMaker Trading Journal | Track NQ Trade Points and Notes</title>
+    <meta
+      name="description"
+      content="PlayMaker includes a futures trading journal for tracking NQ trade results, points, drawdown, max move, notes, wins, losses, and rolling performance."
+    />
+    <link rel="canonical" href="https://www.futuresplaymaker.com/trading-journal.html" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=clean-logo" />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #050505; color: #fff; line-height: 1.6; }
+      .wrap { width: min(1040px, calc(100% - 32px)); margin: 0 auto; }
+      header { border-bottom: 1px solid #2c2300; background: #080808; }
+      .nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; }
+      .brand { display: flex; align-items: center; gap: 10px; color: #ffcc19; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; }
+      .brand img { width: 36px; height: 36px; border-radius: 8px; }
+      .navlinks { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; font-weight: 800; }
+      .navlinks a { text-decoration: none; color: #d8d8d8; }
+      .navlinks a:hover { color: #ffcc19; }
+      main { padding: 48px 0 56px; }
+      h1 { margin: 0; color: #ffcc19; font-size: clamp(34px, 6vw, 64px); line-height: 1; letter-spacing: 0; max-width: 850px; }
+      .lead { margin: 18px 0 0; color: #e6e6e6; font-size: 18px; max-width: 760px; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 30px; }
+      .card { border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 20px; }
+      h2 { margin: 0 0 8px; color: #ffcc19; font-size: 20px; }
+      p { margin: 0; color: #cfcfcf; }
+      .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
+      .stat { border: 1px solid #2c2300; border-radius: 12px; background: #080808; padding: 16px; }
+      .stat strong { display: block; color: #00d27a; font-size: 22px; }
+      .stat span { color: #ababab; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+      .button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 10px; padding: 0 18px; text-decoration: none; font-weight: 900; }
+      .primary { background: #ffcc19; color: #050505; }
+      .secondary { border: 1px solid #ffcc19; color: #ffcc19; }
+      footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
+      @media (max-width: 760px) { .nav { align-items: flex-start; flex-direction: column; } .grid, .stats { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap nav">
+        <a class="brand" href="/"><img src="/icon-192.png" alt="PlayMaker crown logo" />PlayMaker</a>
+        <nav class="navlinks" aria-label="Public pages">
+          <a href="/about.html">About</a>
+          <a href="/how-it-works.html">How It Works</a>
+          <a href="/trading-journal.html">Trading Journal</a>
+          <a href="/">Login</a>
+        </nav>
+      </div>
+    </header>
+    <main class="wrap">
+      <h1>A futures trading journal built into the workflow.</h1>
+      <p class="lead">
+        PlayMaker helps traders record what happened after a setup, not just what looked good before entry.
+      </p>
+      <section class="stats" aria-label="Journal stats">
+        <div class="stat"><strong>Points</strong><span>Total and average</span></div>
+        <div class="stat"><strong>W/L/BE</strong><span>Trade outcomes</span></div>
+        <div class="stat"><strong>Drawdown</strong><span>Risk tracking</span></div>
+        <div class="stat"><strong>Notes</strong><span>Trade lessons</span></div>
+      </section>
+      <section class="grid" aria-label="Journal features">
+        <article class="card">
+          <h2>Track the result</h2>
+          <p>Record whether a trade was a win, loss, break-even, or unfilled so performance stays organized.</p>
+        </article>
+        <article class="card">
+          <h2>Study the move</h2>
+          <p>Log max move, drawdown, and points so strong setups and weak decisions become easier to review.</p>
+        </article>
+        <article class="card">
+          <h2>Keep trade notes</h2>
+          <p>Add notes about behavior, price reaction, stop planning, partials, and why the trade did or did not work.</p>
+        </article>
+        <article class="card">
+          <h2>Review rolling progress</h2>
+          <p>Use rolling results to see recent trade performance without waiting until the end of the month.</p>
+        </article>
+      </section>
+      <div class="actions">
+        <a class="button primary" href="/">Open PlayMaker</a>
+        <a class="button secondary" href="/how-it-works.html">How It Works</a>
+      </div>
+    </main>
+    <footer>
+      <div class="wrap">Trading futures involves risk. PlayMaker is an educational workflow tool, not financial advice.</div>
+    </footer>
+  </body>
+</html>

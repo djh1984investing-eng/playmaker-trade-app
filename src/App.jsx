@@ -5019,9 +5019,30 @@ function PolicyLinks({ onOpen }) {
     { key: "risk", label: "Risk Disclaimer" },
     { key: "contact", label: "Contact" }
   ];
+  const publicPages = [
+    { href: "/about.html", label: "About" },
+    { href: "/how-it-works.html", label: "How It Works" },
+    { href: "/trading-journal.html", label: "Trading Journal" }
+  ];
 
   return (
     <div className="mt-4 border-t border-zinc-800 pt-4">
+      <div className="mb-3 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs">
+        {publicPages.map((link) => (
+          <a
+            key={link.href}
+            href={link.href}
+            onClick={() => trackHomeClick(`seo_${link.label.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`, {
+              pageArea: "public_page_links",
+              linkUrl: link.href,
+              buttonText: link.label
+            })}
+            className="font-black text-[#ffcc19] underline-offset-4 hover:underline"
+          >
+            {link.label}
+          </a>
+        ))}
+      </div>
       <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs">
         {links.map((link) => (
           <button

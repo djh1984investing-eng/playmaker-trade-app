@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>How PlayMaker Works | NQ Signals, Manual Setups, and Journaling</title>
+    <meta
+      name="description"
+      content="See how PlayMaker supports futures traders with signal review, manual trade grading, limit order planning, and trade journal tracking."
+    />
+    <link rel="canonical" href="https://www.futuresplaymaker.com/how-it-works.html" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=clean-logo" />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Arial, Helvetica, sans-serif; background: #050505; color: #fff; line-height: 1.6; }
+      .wrap { width: min(1040px, calc(100% - 32px)); margin: 0 auto; }
+      header { border-bottom: 1px solid #2c2300; background: #080808; }
+      .nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; }
+      .brand { display: flex; align-items: center; gap: 10px; color: #ffcc19; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; text-decoration: none; }
+      .brand img { width: 36px; height: 36px; border-radius: 8px; }
+      .navlinks { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; font-weight: 800; }
+      .navlinks a { text-decoration: none; color: #d8d8d8; }
+      .navlinks a:hover { color: #ffcc19; }
+      main { padding: 48px 0 56px; }
+      h1 { margin: 0; color: #ffcc19; font-size: clamp(34px, 6vw, 64px); line-height: 1; letter-spacing: 0; max-width: 850px; }
+      .lead { margin: 18px 0 0; color: #e6e6e6; font-size: 18px; max-width: 760px; }
+      .steps { display: grid; gap: 14px; margin-top: 30px; }
+      .step { display: grid; grid-template-columns: 64px 1fr; gap: 18px; border: 1px solid #262626; border-radius: 12px; background: #090909; padding: 20px; }
+      .num { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 12px; background: #ffcc19; color: #050505; font-weight: 900; }
+      h2 { margin: 0 0 6px; color: #ffcc19; font-size: 20px; }
+      p { margin: 0; color: #cfcfcf; }
+      .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+      .button { display: inline-flex; align-items: center; justify-content: center; min-height: 46px; border-radius: 10px; padding: 0 18px; text-decoration: none; font-weight: 900; }
+      .primary { background: #ffcc19; color: #050505; }
+      .secondary { border: 1px solid #ffcc19; color: #ffcc19; }
+      footer { border-top: 1px solid #2c2300; padding: 22px 0; color: #9b9b9b; font-size: 13px; }
+      @media (max-width: 700px) { .nav { align-items: flex-start; flex-direction: column; } .step { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap nav">
+        <a class="brand" href="/"><img src="/icon-192.png" alt="PlayMaker crown logo" />PlayMaker</a>
+        <nav class="navlinks" aria-label="Public pages">
+          <a href="/about.html">About</a>
+          <a href="/how-it-works.html">How It Works</a>
+          <a href="/trading-journal.html">Trading Journal</a>
+          <a href="/">Login</a>
+        </nav>
+      </div>
+    </header>
+    <main class="wrap">
+      <h1>How PlayMaker helps organize the trading day.</h1>
+      <p class="lead">
+        PlayMaker gives futures traders one place to review setups, manage order ideas, and study the results afterward.
+      </p>
+      <section class="steps" aria-label="How PlayMaker works">
+        <article class="step">
+          <div class="num">1</div>
+          <div>
+            <h2>Review the active setup board</h2>
+            <p>Scan current long and short ideas by price so important futures market levels are easier to compare.</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="num">2</div>
+          <div>
+            <h2>Check confluence and entry planning</h2>
+            <p>Use the workflow to review the direction, nearby levels, stop size, and the strength of the setup before taking action.</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="num">3</div>
+          <div>
+            <h2>Track fills and management</h2>
+            <p>Move filled ideas into the management area, keep notes, and track whether the setup is still behaving as expected.</p>
+          </div>
+        </article>
+        <article class="step">
+          <div class="num">4</div>
+          <div>
+            <h2>Journal the final result</h2>
+            <p>Record wins, losses, break-even trades, max move, drawdown, and notes so progress can be reviewed over time.</p>
+          </div>
+        </article>
+      </section>
+      <div class="actions">
+        <a class="button primary" href="/">Open PlayMaker</a>
+        <a class="button secondary" href="/trading-journal.html">View Journal Features</a>
+      </div>
+    </main>
+    <footer>
+      <div class="wrap">Trading futures involves risk. PlayMaker is an educational workflow tool, not financial advice.</div>
+    </footer>
+  </body>
+</html>
