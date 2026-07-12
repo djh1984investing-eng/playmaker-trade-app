@@ -244,6 +244,8 @@ const journalScopeOf = (item) => {
   return String(item?.journalScope || item?.verification?.journalScope || item?.verification?.scope || "").toLowerCase();
 };
 
+const GLOBAL_JOURNAL_CACHE_KEY = "playmaker-global-journal-results-v1";
+
 const calculateJournalStats = (items = []) => {
   const closed = items.filter((j) => isCompletedTradeResult(j));
   const wins = closed.filter((j) => normalizeStatus(j.result) === "win").length;
@@ -533,7 +535,16 @@ const getDefaultForm = () => ({
 export default function PlaymakerSetupGrader() {
   const [tab, setTab] = useState("checklist");
   const [journal, setJournal] = useState([]);
-  const [globalJournal, setGlobalJournal] = useState([]);
+  const [globalJournal, setGlobalJournal] = useState(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const cached = window.localStorage.getItem(GLOBAL_JOURNAL_CACHE_KEY);
+      const parsed = cached ? JSON.parse(cached) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
 
   const [user, setUser] = useState(null);
 const [authEmail, setAuthEmail] = useState("");
@@ -583,16 +594,17 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
+  let cancelled = false;
+
   const fetchGlobalJournal = async () => {
     const { data, error } = await supabase
       .from("trade_journal")
       .select("id,created_at,result,max_move,max_drawdown,profit_loss,verification,notes,signal_id,confluences")
       .order("created_at", { ascending: false })
-      .limit(250);
+      .limit(1000);
 
     if (error) {
       console.error("Global journal stats fetch error:", error);
-      setGlobalJournal([]);
       return;
     }
 
@@ -604,7 +616,7 @@ useEffect(() => {
       return completed && scope !== "local" && (scope === "global" || legacyGlobal);
     });
 
-    setGlobalJournal(globalRows.map((row) => ({
+    const mappedRows = globalRows.map((row) => ({
       id: row.id || "",
       createdAt: row.created_at || null,
       result: row.result || "",
@@ -613,11 +625,23 @@ useEffect(() => {
       profitLoss: row.profit_loss ?? "",
       verification: row.verification || null,
       journalScope: row.verification?.journalScope || ""
-    })));
+    }));
+
+    if (cancelled) return;
+    setGlobalJournal(mappedRows);
+    try {
+      window.localStorage.setItem(GLOBAL_JOURNAL_CACHE_KEY, JSON.stringify(mappedRows));
+    } catch {
+      // If browser storage is unavailable, the live fetch still keeps the screen updated.
+    }
   };
 
   fetchGlobalJournal();
-}, []);
+
+  return () => {
+    cancelled = true;
+  };
+}, [user?.id]);
   const [aiSignals, setAiSignals] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiFetchMessage, setAiFetchMessage] = useState("");
@@ -2343,16 +2367,7 @@ useEffect(() => {
 
   const journalStats = useMemo(() => calculateJournalStats(journal), [journal]);
   const globalJournalStats = useMemo(() => calculateJournalStats(globalJournal), [globalJournal]);
-  const automaticSignalStats = useMemo(() => {
-    const seen = new Set();
-    const merged = [...globalJournal, ...journal].filter((item) => {
-      const key = String(item.id || `${item.createdAt || item.date}|${item.result}|${item.maxMove}|${item.maxDrawdown}|${item.profitLoss}`);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return calculateJournalStats(merged);
-  }, [globalJournal, journal]);
+  const automaticSignalStats = globalJournalStats;
 
   const tips = useMemo(() => {
     const t = [];
