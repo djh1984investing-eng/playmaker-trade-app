@@ -596,7 +596,30 @@ useEffect(() => {
 useEffect(() => {
   let cancelled = false;
 
+  const commitGlobalJournalRows = (rows) => {
+    if (cancelled) return;
+    setGlobalJournal(rows);
+    try {
+      window.localStorage.setItem(GLOBAL_JOURNAL_CACHE_KEY, JSON.stringify(rows));
+    } catch {
+      // If browser storage is unavailable, the live fetch still keeps the screen updated.
+    }
+  };
+
   const fetchGlobalJournal = async () => {
+    try {
+      const response = await fetch("/api/journal-stats?limit=1000", { cache: "no-store" });
+      if (response.ok) {
+        const payload = await response.json();
+        if (Array.isArray(payload?.rows)) {
+          commitGlobalJournalRows(payload.rows);
+          return;
+        }
+      }
+    } catch (error) {
+      console.warn("Global journal stats API unavailable, using direct Supabase fallback:", error);
+    }
+
     const { data, error } = await supabase
       .from("trade_journal")
       .select("id,created_at,result,max_move,max_drawdown,profit_loss,verification,notes,signal_id,confluences")
@@ -627,13 +650,7 @@ useEffect(() => {
       journalScope: row.verification?.journalScope || ""
     }));
 
-    if (cancelled) return;
-    setGlobalJournal(mappedRows);
-    try {
-      window.localStorage.setItem(GLOBAL_JOURNAL_CACHE_KEY, JSON.stringify(mappedRows));
-    } catch {
-      // If browser storage is unavailable, the live fetch still keeps the screen updated.
-    }
+    commitGlobalJournalRows(mappedRows);
   };
 
   fetchGlobalJournal();
