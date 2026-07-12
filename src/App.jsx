@@ -5088,7 +5088,12 @@ function PolicyLinks({ onOpen }) {
   const publicPages = [
     { href: "/about.html", label: "About" },
     { href: "/how-it-works.html", label: "How It Works" },
-    { href: "/trading-journal.html", label: "Trading Journal" }
+    { href: "/trading-journal.html", label: "Trading Journal" },
+    { href: "/nq-futures-trading-app.html", label: "NQ Futures App" },
+    { href: "/futures-trading-signals.html", label: "Signals" },
+    { href: "/high-of-day-low-of-day.html", label: "Reversals" },
+    { href: "/manual-trade-grading.html", label: "Manual Grading" },
+    { href: "/backlinks.html", label: "Official Links" }
   ];
 
   return (
