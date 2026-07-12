@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useRef } from "react";
 import WhopGate from "./components/WhopGate";
 import { supabase } from "./lib/supabaseClient";
-import { trackBuyAccessClick, trackHomeClick } from "./lib/googleTracking";
+import { trackBuyAccessClick, trackHomeClick, trackTrialAccessClick } from "./lib/googleTracking";
 import {
   arrayFromMaybe,
   buildStopPlansForCluster,
@@ -42,6 +42,7 @@ import {
 const GREEN = "#00d27a";
 const GOLD = "#ffcc19";
 const WHOP_CHECKOUT_URL = "https://whop.com/checkout/plan_wQepCbh0j806f";
+const WHOP_TRIAL_CHECKOUT_URL = "https://whop.com/checkout/4cKnCvNHDSfSKF5YXv-OGdW-3d0o-JTbf-hvFSSmUpwW1R/";
 const OWNER_EMAILS = ["djh1984investing@gmail.com", "djharrison", "durrell", "djh1984investing-eng"];
 const isOwnerUser = (user) => {
   const text = String(user?.email || user?.id || "").toLowerCase();
@@ -3901,6 +3902,15 @@ const exportJournalCSV = () => {
           >
             Buy Playmaker Access
           </a>
+          <a
+            href={WHOP_TRIAL_CHECKOUT_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={trackTrialAccessClick}
+            className="mt-3 inline-flex w-full justify-center rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
+          >
+            3 Day Trial $30
+          </a>
           <PlaymakerInfoTicker />
           <HighlightVideo />
           <SocialLinks />
@@ -3942,6 +3952,15 @@ const exportJournalCSV = () => {
             className="mt-5 inline-flex w-full justify-center rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black"
           >
             Buy Playmaker Access
+          </a>
+          <a
+            href={WHOP_TRIAL_CHECKOUT_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={trackTrialAccessClick}
+            className="mt-3 inline-flex w-full justify-center rounded-xl border border-[#ffcc19] px-5 py-3 font-black text-[#ffcc19]"
+          >
+            3 Day Trial $30
           </a>
           <PlaymakerInfoTicker />
           <HighlightVideo />

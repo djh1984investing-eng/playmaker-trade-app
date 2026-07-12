@@ -58,3 +58,11 @@ export function trackBuyAccessClick() {
     send_to: `${GOOGLE_ADS_ID}/${GOOGLE_ADS_CONVERSION_LABEL}`
   });
 }
+
+export function trackTrialAccessClick() {
+  trackHomeClick("trial_3_day_30", {
+    pageArea: "access",
+    linkUrl: "https://whop.com/checkout/4cKnCvNHDSfSKF5YXv-OGdW-3d0o-JTbf-hvFSSmUpwW1R/",
+    buttonText: "3 Day Trial $30"
+  });
+}
