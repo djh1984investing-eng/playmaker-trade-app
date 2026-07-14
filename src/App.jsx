@@ -241,6 +241,77 @@ const formatSignedPoints = (value) => {
   return `${parsed >= 0 ? "+" : ""}${fmt(parsed)}`;
 };
 
+const journalFilterRange = (filter = {}) => {
+  const now = new Date();
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const endOfToday = new Date(startOfToday);
+  endOfToday.setDate(endOfToday.getDate() + 1);
+  endOfToday.setMilliseconds(endOfToday.getMilliseconds() - 1);
+
+  const preset = filter.preset || "all";
+  let start = null;
+  let end = null;
+
+  if (preset === "today") {
+    start = new Date(startOfToday);
+    end = new Date(endOfToday);
+  } else if (preset === "yesterday") {
+    start = new Date(startOfToday);
+    start.setDate(start.getDate() - 1);
+    end = new Date(startOfToday);
+    end.setMilliseconds(end.getMilliseconds() - 1);
+  } else if (preset === "last7") {
+    start = new Date(startOfToday);
+    start.setDate(start.getDate() - 6);
+    end = new Date(endOfToday);
+  } else if (preset === "last30") {
+    start = new Date(startOfToday);
+    start.setDate(start.getDate() - 29);
+    end = new Date(endOfToday);
+  } else if (preset === "custom") {
+    if (filter.startDate) {
+      start = new Date(`${filter.startDate}T00:00:00`);
+    }
+    if (filter.endDate) {
+      end = new Date(`${filter.endDate}T23:59:59.999`);
+    }
+  }
+
+  return {
+    start: start && Number.isFinite(start.getTime()) ? start.getTime() : null,
+    end: end && Number.isFinite(end.getTime()) ? end.getTime() : null
+  };
+};
+
+const filterJournalByDate = (items = [], filter = {}) => {
+  const { start, end } = journalFilterRange(filter);
+  if (start === null && end === null) return items;
+
+  return items.filter((item) => {
+    const tradeMs = journalDateMs(item);
+    if (tradeMs === null) return false;
+    if (start !== null && tradeMs < start) return false;
+    if (end !== null && tradeMs > end) return false;
+    return true;
+  });
+};
+
+const journalFilterLabel = (filter = {}) => {
+  const preset = filter.preset || "all";
+  if (preset === "today") return "Today";
+  if (preset === "yesterday") return "Yesterday";
+  if (preset === "last7") return "Last 7 days";
+  if (preset === "last30") return "Last 30 days";
+  if (preset === "custom") {
+    const start = filter.startDate || "Start";
+    const end = filter.endDate || "End";
+    return `${start} to ${end}`;
+  }
+  return "All dates";
+};
+
 const journalScopeOf = (item) => {
   return String(item?.journalScope || item?.verification?.journalScope || item?.verification?.scope || "").toLowerCase();
 };
@@ -536,6 +607,11 @@ const getDefaultForm = () => ({
 export default function PlaymakerSetupGrader() {
   const [tab, setTab] = useState("checklist");
   const [journal, setJournal] = useState([]);
+  const [journalFilter, setJournalFilter] = useState({
+    preset: "all",
+    startDate: "",
+    endDate: ""
+  });
   const [globalJournal, setGlobalJournal] = useState(() => {
     if (typeof window === "undefined") return [];
     try {
@@ -2383,7 +2459,8 @@ useEffect(() => {
     return { score, wins, losses, be, total: closed.length };
   }, [journal]);
 
-  const journalStats = useMemo(() => calculateJournalStats(journal), [journal]);
+  const filteredJournal = useMemo(() => filterJournalByDate(journal, journalFilter), [journal, journalFilter]);
+  const journalStats = useMemo(() => calculateJournalStats(filteredJournal), [filteredJournal]);
   const globalJournalStats = useMemo(() => calculateJournalStats(globalJournal), [globalJournal]);
   const automaticSignalStats = globalJournalStats;
 
@@ -2413,7 +2490,7 @@ useEffect(() => {
     });
   };
 
-const exportJournalCSV = () => {
+const exportJournalCSV = (rowsToExport = filteredJournal) => {
   const headers = [
     "Date",
     "Direction",
@@ -2430,7 +2507,7 @@ const exportJournalCSV = () => {
     "Notes"
   ];
 
-  const rows = journal.map((j) => [
+  const rows = rowsToExport.map((j) => [
     j.date || "",
     j.direction || "",
     j.entry || "",
@@ -3015,7 +3092,8 @@ const exportJournalCSV = () => {
   };
 
   const pulledRecordForAnchor = (anchor) => {
-    return pulledAnchorKeys[anchorSubmitKey(anchor)] || null;
+    const baseKey = anchorBaseKey(anchor);
+    return pulledAnchorKeys[anchorSubmitKey(anchor)] || pulledAnchorKeys[`${baseKey}|`] || pulledAnchorKeys[baseKey] || null;
   };
 
   const clearAnchorTransientState = (anchor) => {
@@ -3139,6 +3217,20 @@ const exportJournalCSV = () => {
     return sig.sourceCount >= oldSourceCount + 2 && sig.score >= oldScore + 10;
   };
 
+  const hasPulledCardComeBack = (zone, pulledRecord) => {
+    if (!pulledRecord || pulledRecord === true) return false;
+    const sig = anchorEvidenceSignature(zone);
+    const oldSourceCount = Number(pulledRecord.sourceCount || 0);
+    const oldScore = Number(pulledRecord.score || 0);
+    const pulledAt = pulledRecord.pulledAt ? new Date(pulledRecord.pulledAt).getTime() : Date.now();
+    const minutesSincePull = (Date.now() - pulledAt) / 60000;
+
+    // A pulled card is a temporary hide. Keep it quiet right away, but let it
+    // return later if the level still qualifies and the stack improved.
+    if (minutesSincePull < 60) return false;
+    return sig.sourceCount >= oldSourceCount + 1 || sig.score >= oldScore + 5;
+  };
+
   const submittedZoneMatches = (zone) => {
     const submittedRecord = submittedRecordForAnchor(zone);
     if (submittedRecord && !hasMeaningfulNewInfo(zone, submittedRecord)) return true;
@@ -3149,6 +3241,13 @@ const exportJournalCSV = () => {
       const journalSignalId = String(j.signal_id || j.ai_signal_id || "");
       return journalSignalId && String(zone?.sourceId || "").includes(journalSignalId);
     });
+  };
+
+  const pulledZoneMatches = (zone) => {
+    const pulledRecord = pulledRecordForAnchor(zone);
+    if (!pulledRecord) return false;
+    if (hasPulledCardComeBack(zone, pulledRecord)) return false;
+    return true;
   };
 
   const markAnchorFilled = async (anchor) => {
@@ -3573,7 +3672,7 @@ const exportJournalCSV = () => {
     ...rankedAiLimitZones
       .filter(isInLatestMarketRange)
       .filter((zone) => !submittedZoneMatches(zone))
-      .filter((zone) => !pulledRecordForAnchor(zone))
+      .filter((zone) => !pulledZoneMatches(zone))
       .filter((zone) => !filledPinnedAnchors.some((filled) => {
         const filledPrice = parsePrice(filled.entry || filled.price);
         const sameDirection = String(filled.direction || "").toLowerCase() === String(zone.direction || "").toLowerCase() || zone.direction === "Both";
@@ -3646,7 +3745,7 @@ const exportJournalCSV = () => {
   const outOfRangeAiAnchors = rankedAiLimitZones
     .filter((zone) => !isInLatestMarketRange(zone))
     .filter((zone) => !submittedZoneMatches(zone))
-    .filter((zone) => !pulledRecordForAnchor(zone))
+    .filter((zone) => !pulledZoneMatches(zone))
     .map((zone) => ({
       id: `out-of-range-${zone.sourceId}-${zone.session}-${zone.direction}-${zone.price}`,
       date: formatEastern(zone.created_at),
@@ -4519,8 +4618,11 @@ const exportJournalCSV = () => {
         {tab === "breakdown" && <Breakdown report={report} recommendations={recommendations} tips={tips} />}
         {tab === "journal" && (
           <Journal
-            journal={journal}
+            journal={filteredJournal}
+            totalJournalCount={journal.length}
             journalStats={journalStats}
+            journalFilter={journalFilter}
+            setJournalFilter={setJournalFilter}
             saveTrade={saveTrade}
             editTrade={editTrade}
             deleteJournalEntry={deleteJournalEntry}
@@ -5388,8 +5490,31 @@ function Breakdown({ report, recommendations, tips }) {
   return <div className="mt-6 grid gap-5 lg:grid-cols-2"><Card><Title>Adjusted Recommendations</Title><div className="mt-4 space-y-3">{recommendations.map((r) => <Rec key={r.stop} r={r} />)}</div></Card><Card><Title>Tips</Title><div className="mt-4 space-y-3">{tips.map((t, i) => <div key={i} className="rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-zinc-200">{t}</div>)}</div></Card><Card className="lg:col-span-2"><Title>Score Breakdown</Title><div className="mt-4 grid gap-3 md:grid-cols-4"><Small label="Zone Score" value={`${report.zoneScore}/100`} /><Small label="Precision Grade Score" value={`${report.score}/100`} /><Small label="Top 3 Within 5" value={`${report.topWithin5}/3`} /><Small label="Far Levels 8+" value={report.farCount} /></div><div className="mt-4 rounded-xl border border-[#2c2300] bg-[#0b0b0b] p-4 text-sm text-zinc-300">Raw points still count the reaction zone. The grade is capped by entry precision: top-weighted confluences need to align within 3–5 points for A/A+.</div><div className="mt-4 grid gap-3 md:grid-cols-2">{report.rows.map((r) => <div key={r.key} className="rounded-xl border border-zinc-800 bg-[#090909] p-4"><div className="flex justify-between"><b>{r.name}</b><b className="text-[#ffcc19]">{r.score.toFixed(1)}</b></div><div className="mt-1 text-sm text-zinc-500">Base {r.base} • Away {r.pointsAway} • {r.note}</div></div>)}</div></Card></div>;
 }
 
-function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEntry, exportJournalCSV, form, set, editingId, handleImageUpload }) {
+function Journal({ journal, totalJournalCount = 0, journalStats, journalFilter, setJournalFilter, saveTrade, editTrade, deleteJournalEntry, exportJournalCSV, form, set, editingId, handleImageUpload }) {
   const stats = journalStats || { total: 0, closed: 0, wins: 0, losses: 0, be: 0, unfilled: 0, winRate: 0, totalPL: 0, totalPoints: 0, avgPL: 0, avgMove: 0, avgDrawdown: 0, avgDiscount: 0 };
+  const activePreset = journalFilter?.preset || "all";
+  const setPreset = (preset) => {
+    setJournalFilter((prev) => ({
+      ...prev,
+      preset,
+      ...(preset === "custom" ? {} : { startDate: "", endDate: "" })
+    }));
+  };
+  const setCustomDate = (key, value) => {
+    setJournalFilter((prev) => ({
+      ...prev,
+      preset: "custom",
+      [key]: value
+    }));
+  };
+  const filterButtons = [
+    ["all", "All"],
+    ["today", "Today"],
+    ["yesterday", "Yesterday"],
+    ["last7", "7 Days"],
+    ["last30", "30 Days"],
+    ["custom", "Custom"]
+  ];
 
   return (
     <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]">
@@ -5424,6 +5549,56 @@ function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEnt
       </Card>
 
       <Card>
+        <div className="mb-6 rounded-2xl border border-zinc-800 bg-[#090909] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-black uppercase tracking-[0.18em] text-[#ffcc19]">Journal Report Filter</div>
+              <div className="mt-1 text-sm text-zinc-400">
+                Showing {journal.length} of {totalJournalCount} entries - {journalFilterLabel(journalFilter)}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setJournalFilter({ preset: "all", startDate: "", endDate: "" })}
+              className="rounded-xl border border-zinc-700 px-4 py-2 text-sm font-black text-zinc-200 hover:border-[#ffcc19]"
+            >
+              Clear
+            </button>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            {filterButtons.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setPreset(value)}
+                className={`rounded-xl border px-3 py-2 text-sm font-black ${activePreset === value ? "border-[#ffcc19] bg-[#ffcc19] text-black" : "border-zinc-700 bg-black text-zinc-300 hover:border-[#ffcc19]"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-2 block text-xs font-black uppercase tracking-[0.14em] text-zinc-400">Start Date</span>
+              <input
+                type="date"
+                value={journalFilter?.startDate || ""}
+                onChange={(e) => setCustomDate("startDate", e.target.value)}
+                className="w-full rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white outline-none focus:border-[#ffcc19]"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-2 block text-xs font-black uppercase tracking-[0.14em] text-zinc-400">End Date</span>
+              <input
+                type="date"
+                value={journalFilter?.endDate || ""}
+                onChange={(e) => setCustomDate("endDate", e.target.value)}
+                className="w-full rounded-lg border border-zinc-700 bg-black px-4 py-3 text-white outline-none focus:border-[#ffcc19]"
+              />
+            </label>
+          </div>
+        </div>
+
         <Title>Journal Dashboard</Title>
         <JournalPointsCounter stats={stats} />
         <div className="mt-4 grid gap-3 md:grid-cols-4">
@@ -5444,7 +5619,7 @@ function Journal({ journal, journalStats, saveTrade, editTrade, deleteJournalEnt
 
         <div className="mt-5 flex items-center justify-between gap-3">
           <Title>Journal</Title>
-          <button onClick={exportJournalCSV} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button>
+          <button onClick={() => exportJournalCSV(journal)} className="rounded-xl bg-[#ffcc19] px-5 py-3 font-black text-black">Export Journal CSV</button>
         </div>
 
         <div className="mt-5 overflow-x-auto">
