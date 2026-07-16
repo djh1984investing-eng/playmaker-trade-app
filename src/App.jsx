@@ -233,12 +233,40 @@ const journalStatsDateMs = (item) => {
   return Number.isFinite(parsed) ? parsed : journalDateMs(item);
 };
 
-const journalDayKey = (date) => {
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+const journalReportDateMs = (item) => {
+  return journalStatsDateMs(item);
 };
 
-const formatJournalDay = (date) => {
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const easternDateParts = (value = new Date()) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day)
+  };
+};
+
+const journalDayKey = (value) => {
+  const parts = easternDateParts(value);
+  if (!parts) return "";
+  return `${parts.year}-${parts.month}-${parts.day}`;
+};
+
+const formatJournalDay = (value) => {
+  const parts = easternDateParts(value);
+  if (!parts) return "Today";
+  const date = new Date(parts.year, parts.month - 1, parts.day);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 
 const formatSignedPoints = (value) => {
@@ -296,7 +324,7 @@ const filterJournalByDate = (items = [], filter = {}) => {
   if (start === null && end === null) return items;
 
   return items.filter((item) => {
-    const tradeMs = journalDateMs(item);
+    const tradeMs = journalReportDateMs(item);
     if (tradeMs === null) return false;
     if (start !== null && tradeMs < start) return false;
     if (end !== null && tradeMs > end) return false;
@@ -337,18 +365,8 @@ const calculateJournalStats = (items = []) => {
   const avgDrawdown = averageJournalNumber(closed, "maxDrawdown");
   const avgDiscount = averageJournalNumber(closed, "discountPoints");
   const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
-  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const rollingClosed = closed.filter((j) => {
-    const tradeMs = journalStatsDateMs(j);
-    return tradeMs !== null && tradeMs >= sevenDaysAgo;
-  });
-  const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
-  const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
-  const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
-  const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
-  const rollingPoints = sumJournalNetPoints(rollingClosed);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const todayParts = easternDateParts(new Date());
+  const today = todayParts ? new Date(todayParts.year, todayParts.month - 1, todayParts.day, 12) : new Date();
   const rollingDays = Array.from({ length: 7 }, (_, index) => {
     const date = new Date(today);
     date.setDate(today.getDate() - (6 - index));
@@ -363,12 +381,20 @@ const calculateJournalStats = (items = []) => {
     };
   });
   const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
+  const rollingClosed = closed.filter((j) => {
+    const tradeMs = journalStatsDateMs(j);
+    if (tradeMs === null) return false;
+    return dayMap.has(journalDayKey(new Date(tradeMs)));
+  });
+  const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
+  const rollingLosses = rollingClosed.filter((j) => normalizeStatus(j.result) === "loss").length;
+  const rollingBe = rollingClosed.filter((j) => normalizeStatus(j.result) === "be").length;
+  const rollingWinRate = rollingClosed.length ? Math.round((rollingWins / rollingClosed.length) * 100) : 0;
+  const rollingPoints = sumJournalNetPoints(rollingClosed);
   rollingClosed.forEach((trade) => {
     const tradeMs = journalStatsDateMs(trade);
     if (tradeMs === null) return;
-    const tradeDate = new Date(tradeMs);
-    tradeDate.setHours(0, 0, 0, 0);
-    const day = dayMap.get(journalDayKey(tradeDate));
+    const day = dayMap.get(journalDayKey(new Date(tradeMs)));
     if (!day) return;
     const result = normalizeStatus(trade.result);
     day.points += journalNetPoints(trade);
@@ -2849,16 +2875,49 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
   const saveTrade = async () => {
     const statsUpdatedAt = new Date().toISOString();
-    const item = makeJournalItem(form.result, { statsUpdatedAt });
-    item.statsUpdatedAt = statsUpdatedAt;
-    item.verification = { ...(item.verification || {}), statsUpdatedAt };
     const isEditingExisting = Boolean(
       editingId &&
-      item.id &&
-      !String(item.id).startsWith("reported-") &&
-      !String(item.id).startsWith("ai-") &&
-      !String(item.id).startsWith("zone-")
+      selectedTrade?.id &&
+      !String(selectedTrade.id).startsWith("reported-") &&
+      !String(selectedTrade.id).startsWith("ai-") &&
+      !String(selectedTrade.id).startsWith("zone-")
     );
+    const normalizedResult = form.result === "Edge" || form.result === "Unfilled" ? "Unfilled" : form.result;
+    const editEvidence = selectedTrade?.evidence || selectedTrade?.formSnapshot?.evidence || selectedTrade?.rawSignal?.evidence || [];
+    const item = isEditingExisting
+      ? {
+        ...selectedTrade,
+        id: selectedTrade.id,
+        createdAt: selectedTrade.createdAt || selectedTrade.created_at || selectedTrade.date || new Date().toISOString(),
+        date: selectedTrade.date || formatEastern(selectedTrade.createdAt || selectedTrade.created_at || new Date()),
+        statsUpdatedAt,
+        direction: selectedTrade.direction || form.direction,
+        entry: selectedTrade.entry || form.tradeEntryPrice,
+        grade: selectedTrade.grade || "",
+        score: selectedTrade.score ?? 0,
+        result: normalizedResult,
+        orderStatus: normalizedResult === "Unfilled" ? "Unfilled" : "Reported",
+        pendingOrder: normalizedResult === "Unfilled",
+        maxMove: form.maxMove,
+        maxDrawdown: form.maxDrawdown,
+        profitLoss: form.profitLoss,
+        discountPoints: form.discountPoints,
+        maxDiscountPoints: form.maxDiscountPoints,
+        notes: form.notes || "",
+        tradeImages: form.tradeImages || [],
+        top: selectedTrade.top || "",
+        sourceType: selectedTrade.sourceType || "Manual Order",
+        signal_id: selectedTrade.signal_id || selectedTrade.ai_signal_id || "",
+        signalName: selectedTrade.signalName || selectedTrade.signal || "",
+        evidence: editEvidence,
+        rawSignal: selectedTrade.rawSignal || selectedTrade.aiPayload || null,
+        verification: { ...(selectedTrade.verification || {}), statsUpdatedAt },
+        journalScope: selectedTrade.journalScope || journalScopeOf(selectedTrade),
+        formSnapshot: { ...(selectedTrade.formSnapshot || {}), ...form, evidence: editEvidence, aiPayload: selectedTrade.rawSignal || selectedTrade.formSnapshot?.aiPayload || null }
+      }
+      : makeJournalItem(form.result, { statsUpdatedAt });
+    item.statsUpdatedAt = statsUpdatedAt;
+    item.verification = { ...(item.verification || {}), statsUpdatedAt };
     const savedItem = await saveTradeToDatabase(item, isEditingExisting);
 
     if (!isEditingExisting) await saveTradeMemory(savedItem);
@@ -2910,6 +2969,13 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     }
 
     setTab(targetTab);
+    if (targetTab === "journal") {
+      window.setTimeout(() => {
+        const formCard = document.getElementById("journal-report-form");
+        formCard?.scrollIntoView({ behavior: "smooth", block: "start" });
+        formCard?.querySelector("select, input, textarea, button")?.focus?.();
+      }, 120);
+    }
   };
 
   const deleteJournalEntry = async (item) => {
@@ -5403,8 +5469,8 @@ function PolicyModal({ policyKey, onClose }) {
   );
 }
 
-function Card({ children, className = "" }) {
-  return <div className={`rounded-3xl border border-[#2c2300] bg-black p-6 shadow-xl shadow-black/30 ${className}`}>{children}</div>;
+function Card({ children, className = "", ...props }) {
+  return <div {...props} className={`rounded-3xl border border-[#2c2300] bg-black p-6 shadow-xl shadow-black/30 ${className}`}>{children}</div>;
 }
 
 function Title({ children }) {
@@ -5604,7 +5670,7 @@ function Journal({ journal, totalJournalCount = 0, journalStats, journalFilter, 
 
   return (
     <div className="mt-6 grid gap-5 lg:grid-cols-[420px_1fr]">
-      <Card>
+      <Card id="journal-report-form">
         <Title>{editingId ? "Edit Report" : "Report Result"}</Title>
         <div className="mt-5 grid gap-4">
           <Select label="Result" value={form.result} options={["Win", "Loss", "BE", "Unfilled"]} onChange={(v) => set("result", v)} />
@@ -5737,8 +5803,8 @@ function Journal({ journal, totalJournalCount = 0, journalStats, journalFilter, 
                     <td>{j.profitLoss}</td>
                     <td>
                       <div className="flex gap-3">
-                        <button onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button>
-                        <button onClick={() => deleteJournalEntry?.(j)} className="text-red-400 font-bold">Delete</button>
+                        <button type="button" onClick={() => editTrade(j)} className="text-[#ffcc19] font-bold">Edit</button>
+                        <button type="button" onClick={() => deleteJournalEntry?.(j)} className="text-red-400 font-bold">Delete</button>
                       </div>
                     </td>
                   </tr>
