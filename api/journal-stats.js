@@ -40,6 +40,7 @@ export default async function handler(req, res) {
     const rows = (data || []).filter(isGlobalJournalRow).map((row) => ({
       id: row.id || "",
       createdAt: row.created_at || null,
+      statsUpdatedAt: row.verification?.statsUpdatedAt || row.created_at || null,
       result: row.result || "",
       maxMove: row.max_move ?? "",
       maxDrawdown: row.max_drawdown ?? "",

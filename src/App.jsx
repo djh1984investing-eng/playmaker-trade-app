@@ -227,6 +227,12 @@ const journalDateMs = (item) => {
   return Number.isFinite(fallback) ? fallback : null;
 };
 
+const journalStatsDateMs = (item) => {
+  const raw = item?.statsUpdatedAt || item?.verification?.statsUpdatedAt || item?.updatedAt || item?.updated_at;
+  const parsed = new Date(raw).getTime();
+  return Number.isFinite(parsed) ? parsed : journalDateMs(item);
+};
+
 const journalDayKey = (date) => {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
 };
@@ -333,7 +339,7 @@ const calculateJournalStats = (items = []) => {
   const winRate = closed.length ? Math.round((wins / closed.length) * 100) : 0;
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const rollingClosed = closed.filter((j) => {
-    const tradeMs = journalDateMs(j);
+    const tradeMs = journalStatsDateMs(j);
     return tradeMs !== null && tradeMs >= sevenDaysAgo;
   });
   const rollingWins = rollingClosed.filter((j) => normalizeStatus(j.result) === "win").length;
@@ -358,7 +364,7 @@ const calculateJournalStats = (items = []) => {
   });
   const dayMap = new Map(rollingDays.map((day) => [day.key, day]));
   rollingClosed.forEach((trade) => {
-    const tradeMs = journalDateMs(trade);
+    const tradeMs = journalStatsDateMs(trade);
     if (tradeMs === null) return;
     const tradeDate = new Date(tradeMs);
     tradeDate.setHours(0, 0, 0, 0);
@@ -719,6 +725,7 @@ useEffect(() => {
     const mappedRows = globalRows.map((row) => ({
       id: row.id || "",
       createdAt: row.created_at || null,
+      statsUpdatedAt: row.verification?.statsUpdatedAt || row.updated_at || row.created_at || null,
       result: row.result || "",
       maxMove: row.max_move ?? "",
       maxDrawdown: row.max_drawdown ?? "",
@@ -1322,6 +1329,7 @@ useEffect(() => {
           signal_id: row.signal_id || row.ai_signal_id || "",
           verification: row.verification || null,
           journalScope: row.verification?.journalScope || row.verification?.scope || "",
+          statsUpdatedAt: row.verification?.statsUpdatedAt || row.updated_at || row.created_at || null,
           sourceType: row.notes?.includes("AI Signal:") ? "AI Signal" : "Manual Order",
           evidence: Array.isArray(row.confluences) ? row.confluences : [],
           formSnapshot: row.confluences ? { evidence: row.confluences } : null
@@ -2629,6 +2637,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     return {
       id: extra.id || selectedTrade?.id || editingId || Date.now(),
       createdAt: extra.createdAt || selectedTrade?.createdAt || new Date().toISOString(),
+      statsUpdatedAt: extra.statsUpdatedAt || selectedTrade?.statsUpdatedAt || selectedTrade?.verification?.statsUpdatedAt || null,
       date: extra.date || selectedTrade?.date || formatEastern(new Date()),
       direction: form.direction,
       entry: form.tradeEntryPrice,
@@ -2770,6 +2779,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     const globalRow = shouldShowGlobal ? {
       id: savedItem.id || "",
       createdAt: savedItem.createdAt || null,
+      statsUpdatedAt: savedItem.statsUpdatedAt || savedItem.verification?.statsUpdatedAt || new Date().toISOString(),
       result: savedItem.result || "",
       maxMove: savedItem.maxMove ?? "",
       maxDrawdown: savedItem.maxDrawdown ?? "",
@@ -2838,7 +2848,10 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
   };
 
   const saveTrade = async () => {
-    const item = makeJournalItem(form.result);
+    const statsUpdatedAt = new Date().toISOString();
+    const item = makeJournalItem(form.result, { statsUpdatedAt });
+    item.statsUpdatedAt = statsUpdatedAt;
+    item.verification = { ...(item.verification || {}), statsUpdatedAt };
     const isEditingExisting = Boolean(
       editingId &&
       item.id &&
@@ -2863,40 +2876,40 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     setTab("journal");
   };
 
-  const editTrade = (item) => {
+  const editTrade = (item, options = {}) => {
     setSelectedTrade(item);
     setEditingId(item.id);
 
+    const targetTab = options.targetTab || "journal";
+    const savedFormValues = {
+      direction: item.direction || "Long",
+      tradeEntryPrice: item.entry || "",
+      result: item.result || "Unfilled",
+      maxMove: item.maxMove ?? "",
+      maxDrawdown: item.maxDrawdown ?? "",
+      profitLoss: item.profitLoss ?? "",
+      discountPoints: item.discountPoints ?? "",
+      maxDiscountPoints: item.maxDiscountPoints ?? "",
+      notes: item.notes || "",
+      tradeImages: item.tradeImages || []
+    };
+
     if (item.formSnapshot) {
+      const snapshot = item.formSnapshot || {};
       setForm({
         ...getDefaultForm(),
-        ...item.formSnapshot,
-        result: item.result || "Unfilled",
-        maxMove: item.maxMove || "",
-        maxDrawdown: item.maxDrawdown || "",
-        profitLoss: item.profitLoss || "",
-        discountPoints: item.discountPoints || "",
-        maxDiscountPoints: item.maxDiscountPoints || "",
-        notes: item.notes || "",
-        tradeImages: item.tradeImages || []
+        ...snapshot,
+        ...savedFormValues,
+        evidence: snapshot.evidence || item.evidence || []
       });
     } else {
       setForm((f) => ({
         ...f,
-        direction: item.direction || "Long",
-        tradeEntryPrice: item.entry || "",
-        result: item.result || "Unfilled",
-        maxMove: item.maxMove || "",
-        maxDrawdown: item.maxDrawdown || "",
-        profitLoss: item.profitLoss || "",
-        discountPoints: item.discountPoints || "",
-        maxDiscountPoints: item.maxDiscountPoints || "",
-        notes: item.notes || "",
-        tradeImages: item.tradeImages || []
+        ...savedFormValues
       }));
     }
 
-    setTab("checklist");
+    setTab(targetTab);
   };
 
   const deleteJournalEntry = async (item) => {
@@ -3095,7 +3108,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     if (anchor.sourceType === "AI Signal") {
       selectAiSignal(anchor.rawSignal || anchor);
     } else {
-      editTrade(anchor);
+      editTrade(anchor, { targetTab: "checklist" });
     }
   };
 
