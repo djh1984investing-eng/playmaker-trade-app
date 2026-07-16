@@ -771,6 +771,7 @@ useEffect(() => {
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
   const previousAnchorMapRef = useRef(null);
+  const pendingRemovedAnchorMapRef = useRef(new Map());
   const sentDiscordNoticeKeysRef = useRef(new Set(Object.keys(seenNotificationKeys)));
   const suppressDiscordUntilRef = useRef(0);
   const notificationAudioRef = useRef(null);
@@ -2627,8 +2628,8 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
     return {
       id: extra.id || selectedTrade?.id || editingId || Date.now(),
-      createdAt: extra.createdAt || new Date().toISOString(),
-      date: formatEastern(new Date()),
+      createdAt: extra.createdAt || selectedTrade?.createdAt || new Date().toISOString(),
+      date: extra.date || selectedTrade?.date || formatEastern(new Date()),
       direction: form.direction,
       entry: form.tradeEntryPrice,
       grade: isAiAnchor && selectedTrade?.grade ? selectedTrade.grade : grade(report.score)[0],
@@ -2724,7 +2725,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
     let savedItem = item;
 
-    if (updateExisting && item.id && selectedTrade?.sourceType !== "AI Signal") {
+    if (updateExisting && item.id) {
       const { error } = await supabase
         .from("trade_journal")
         .update(tradePayload(item))
@@ -2755,6 +2756,40 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     }
 
     return savedItem;
+  };
+
+  const syncGlobalJournalAfterSave = (savedItem) => {
+    const scope = journalScopeOf(savedItem);
+    const notes = String(savedItem.notes || "").toLowerCase();
+    const shouldShowGlobal =
+      isCompletedTradeResult(savedItem) &&
+      scope !== "local" &&
+      (!scope || scope === "global") &&
+      !(!scope && notes.includes("local journal"));
+
+    const globalRow = shouldShowGlobal ? {
+      id: savedItem.id || "",
+      createdAt: savedItem.createdAt || null,
+      result: savedItem.result || "",
+      maxMove: savedItem.maxMove ?? "",
+      maxDrawdown: savedItem.maxDrawdown ?? "",
+      profitLoss: savedItem.profitLoss ?? "",
+      verification: savedItem.verification || null,
+      journalScope: savedItem.journalScope || savedItem.verification?.journalScope || ""
+    } : null;
+
+    setGlobalJournal((rows) => {
+      const withoutOld = rows.filter((row) => String(row.id) !== String(savedItem.id));
+      const next = (globalRow ? [globalRow, ...withoutOld] : withoutOld)
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+        .slice(0, 1000);
+      try {
+        window.localStorage.setItem(GLOBAL_JOURNAL_CACHE_KEY, JSON.stringify(next));
+      } catch {
+        // The live state is already updated; storage is only a fast reload cache.
+      }
+      return next;
+    });
   };
 
   const saveTradeMemory = async (item) => {
@@ -2804,18 +2839,25 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
   const saveTrade = async () => {
     const item = makeJournalItem(form.result);
-    const isReportingExisting = Boolean(selectedTrade && selectedTrade.sourceType !== "AI Signal");
-    const savedItem = await saveTradeToDatabase(item, isReportingExisting);
+    const isEditingExisting = Boolean(
+      editingId &&
+      item.id &&
+      !String(item.id).startsWith("reported-") &&
+      !String(item.id).startsWith("ai-") &&
+      !String(item.id).startsWith("zone-")
+    );
+    const savedItem = await saveTradeToDatabase(item, isEditingExisting);
 
-    await saveTradeMemory(savedItem);
+    if (!isEditingExisting) await saveTradeMemory(savedItem);
 
     setJournal((j) => {
-      const withoutOldOpenCopies = j.filter((x) => !sameTradeAnchor(x, savedItem));
+      const withoutOldOpenCopies = j.filter((x) => String(x.id) !== String(savedItem.id) && !sameTradeAnchor(x, savedItem));
 
       // Closed/filled/reported orders stay in the Journal table, but they no longer qualify
       // for Active Trade Anchors because isOpenOrder() returns false for them.
       return [savedItem, ...withoutOldOpenCopies];
     });
+    syncGlobalJournalAfterSave(savedItem);
 
     clearTradeForm();
     setTab("journal");
@@ -3843,6 +3885,22 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
     const notifyEligibleAnchors = activeAnchors.filter((anchor) => anchor.sourceType === "AI Signal");
     const currentAnchorMap = new Map(notifyEligibleAnchors.map((anchor) => [anchorKeyFor(anchor), anchor]));
+    const stillTrackedAnchorMap = new Map([
+      ...notifyEligibleAnchors,
+      ...outOfRangeAiAnchors,
+      ...rankedAiLimitZones.map((zone) => ({
+        direction: zone.direction,
+        entry: zone.price,
+        price: zone.price,
+        grade: zone.grade,
+        score: zone.score,
+        sourceCount: zone.sourceCount || zone.evidence?.length || 0
+      }))
+    ].map((anchor) => [anchorKeyFor(anchor), anchor]));
+    const pendingRemovedMap = pendingRemovedAnchorMapRef.current instanceof Map ? pendingRemovedAnchorMapRef.current : new Map();
+    const removalGraceMs = 3 * 60 * 1000;
+    currentAnchorMap.forEach((_, anchorKey) => pendingRemovedMap.delete(anchorKey));
+    stillTrackedAnchorMap.forEach((_, anchorKey) => pendingRemovedMap.delete(anchorKey));
     const priorAnchorMap = previousAnchorMapRef.current instanceof Map ? previousAnchorMapRef.current : null;
     const newNotices = [];
 
@@ -3882,8 +3940,15 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
     priorAnchorMap.forEach((oldAnchor, anchorKey) => {
       if (currentAnchorMap.has(anchorKey)) return;
+      if (stillTrackedAnchorMap.has(anchorKey)) return;
       if (submittedAnchorKeys[`${anchorKey}|`] || submittedAnchorKeys[anchorSubmitKey(oldAnchor)]) return;
       if (filledAnchorKeys[anchorKey] || filledAnchorKeys[`${anchorKey}|`]) return;
+      const pendingRemoval = pendingRemovedMap.get(anchorKey);
+      if (!pendingRemoval) {
+        pendingRemovedMap.set(anchorKey, { anchor: oldAnchor, firstMissingAt: Date.now() });
+        return;
+      }
+      if (Date.now() - Number(pendingRemoval.firstMissingAt || Date.now()) < removalGraceMs) return;
       const directionText = String(oldAnchor.direction || "BOTH").toUpperCase();
       const priceText = fmtPrice(oldAnchor.entry || oldAnchor.price);
       const gradeText = oldAnchor.grade || "Setup";
@@ -3893,17 +3958,25 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
         const detail = `${directionText} ${priceText} • Grade ${gradeText} • Sources ${sources} • removed from board • ${formatEastern(new Date())}`;
         newNotices.push({ key, kind: "REMOVED", title: "Playmaker Signal Removed", detail, anchor: oldAnchor, createdAt: new Date().toISOString(), voice: "play maker set up removed" });
       }
+      pendingRemovedMap.delete(anchorKey);
     });
 
     if (newNotices.length) {
       setNotificationLog((prev) => [...newNotices, ...prev].slice(0, 50));
       setSeenNotificationKeys((prev) => ({ ...prev, ...Object.fromEntries(newNotices.map((n) => [n.key, true])) }));
       newNotices.forEach((notice) => notifyPlaymaker(notice.title, notice.detail, notice.voice));
-      newNotices.forEach((notice) => sendDiscordBoardNotice({ event: notice.kind, title: notice.title, detail: notice.detail, anchor: notice.anchor }));
+      newNotices
+        .filter((notice) => notice.kind !== "REMOVED")
+        .forEach((notice) => sendDiscordBoardNotice({ event: notice.kind, title: notice.title, detail: notice.detail, anchor: notice.anchor }));
     }
 
-    previousAnchorMapRef.current = currentAnchorMap;
-  }, [activeAnchors, seenNotificationKeys, submittedAnchorKeys, filledAnchorKeys]);
+    pendingRemovedAnchorMapRef.current = pendingRemovedMap;
+    const nextAnchorMap = new Map(currentAnchorMap);
+    pendingRemovedMap.forEach((pendingRemoval, anchorKey) => {
+      if (!nextAnchorMap.has(anchorKey) && pendingRemoval?.anchor) nextAnchorMap.set(anchorKey, pendingRemoval.anchor);
+    });
+    previousAnchorMapRef.current = nextAnchorMap;
+  }, [activeAnchors, outOfRangeAiAnchors, rankedAiLimitZones, seenNotificationKeys, submittedAnchorKeys, filledAnchorKeys]);
 
 
   const learningStats = useMemo(() => {
