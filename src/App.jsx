@@ -1333,7 +1333,7 @@ useEffect(() => {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false });
         if (!error && data) {
-        setJournal(data.map((row) => ({
+        setJournal(data.filter((row) => normalizeStatus(row.result) !== "reported").map((row) => ({
           id: row.id || Date.now(),
           createdAt: row.created_at || null,
           date: row.created_at ? new Date(row.created_at).toLocaleDateString() : new Date().toLocaleDateString(),
@@ -3558,6 +3558,58 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
   const submitAnchorToJournal = async (anchor, scope = "global") => {
     if (!anchor) return;
+    {
+    const payload = anchor.rawSignal || anchor.payload || {};
+    const entryValue = anchor.entry || anchor.price || payload.entry || payload.price || "";
+    const directionValue = anchor.direction || payload.direction || "Both";
+    const isManualSubmit = isManualOrder(anchor);
+    const signalName = anchor.signalName || payload.signal || (isManualSubmit ? "Manual Trade" : "AI Level");
+    const verification = getAnchorVerification(anchor);
+    const submitNotes = isManualSubmit
+      ? `Manual Trade: ${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)}`
+      : (verification?.ownerNote
+        ? `AI Signal: ${signalName} - Owner Note: ${verification.ownerNote}`
+        : `AI Signal: ${signalName}`);
+
+    setSelectedTrade({
+      ...anchor,
+      sourceType: anchor.sourceType || "AI Signal",
+      signal_id: anchor.signal_id || payload.id || "",
+      signalName,
+      verification: { ...(verification || {}), journalScope: scope },
+      journalScope: scope,
+      evidence: anchor.evidence || payload.evidence || [],
+      rawSignal: payload
+    });
+    setEditingId(null);
+    setForm((prev) => ({
+      ...prev,
+      tradeEntryPrice: String(entryValue || ""),
+      direction: directionValue,
+      result: "Win",
+      maxMove: "",
+      maxDrawdown: "",
+      profitLoss: "",
+      discountPoints: "",
+      maxDiscountPoints: "",
+      notes: submitNotes,
+      tradeImages: [],
+      evidence: anchor.evidence || payload.evidence || [],
+      aiPayload: payload
+    }));
+
+    const detail = `${String(directionValue || "BOTH").toUpperCase()} ${fmtPrice(entryValue)} - journal form opened - enter Win/Loss/BE and points before saving - ${formatEastern(new Date())}`;
+    setNotificationLog((prev) => [{
+      key: `JOURNAL-FORM-${anchorSubmitKey(anchor)}-${Date.now()}`,
+      kind: "JOURNAL",
+      title: "Journal report ready",
+      detail,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+    notifyPlaymaker("Journal report ready", detail, "play maker journal report ready");
+    setTab("journal");
+    return;
+    }
     const isGlobalSubmit = scope === "global";
 
     // Owner board actions hide cards; member local journal saves should not
