@@ -42,6 +42,49 @@ const isDiscordEligibleSignal = (anchor = {}) => {
   return sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
 };
 
+const isBillingOrWhopEvent = ({ event = "", title = "", detail = "", anchor = {} } = {}) => {
+  const text = [
+    event,
+    title,
+    detail,
+    anchor?.type,
+    anchor?.event,
+    anchor?.source,
+    anchor?.sourceType,
+    anchor?.source_type,
+    anchor?.signalName,
+    anchor?.customer,
+    anchor?.email,
+    anchor?.payment,
+    anchor?.subscription,
+    anchor?.invoice,
+    anchor?.checkout,
+    anchor?.rawSignal?.type,
+    anchor?.rawSignal?.event,
+    anchor?.rawSignal?.source,
+    anchor?.payload?.type,
+    anchor?.payload?.event,
+    anchor?.payload?.source
+  ].map((value) => String(value || "").toLowerCase()).join(" ");
+
+  return [
+    "whop",
+    "payment",
+    "paid",
+    "checkout",
+    "invoice",
+    "billing",
+    "subscription",
+    "customer",
+    "receipt",
+    "refund",
+    "charge",
+    "card",
+    "trial",
+    "plan_"
+  ].some((word) => text.includes(word));
+};
+
 const normalizePrice = (value) => {
   const parsed = Number(String(value ?? "").replace(/,/g, ""));
   return Number.isFinite(parsed) ? String(Math.round(parsed * 4) / 4) : "NA";
@@ -72,6 +115,7 @@ const shouldSkipDuplicate = (payload) => {
 
 const postToDiscord = async ({ event = "UPDATE", title = "Playmaker Signal", detail = "", anchor = {} }) => {
   if (!discordWebhookUrl) return { skipped: true };
+  if (isBillingOrWhopEvent({ event, title, detail, anchor })) return { skipped: true, reason: "Billing and Whop events are private" };
   if (isManualAnchor({ event, title, detail, anchor })) return { skipped: true, reason: "Manual order notices are local only" };
   if (!isDiscordEligibleSignal(anchor)) return { skipped: true, reason: "Only Playmaker signal events go to Discord" };
   if (shouldSkipDuplicate({ event, title, detail, anchor })) return { skipped: true, reason: "Duplicate notice skipped" };
