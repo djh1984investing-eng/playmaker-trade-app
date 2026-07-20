@@ -3953,7 +3953,14 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
       if (!acc.some((item) => anchorBaseKey(item) === key)) acc.push(anchor);
       return acc;
     }, [])
-    .sort((a, b) => new Date(b.filledAt || b.updatedAt || b.date || 0).getTime() - new Date(a.filledAt || a.updatedAt || a.date || 0).getTime());
+    .sort((a, b) => {
+      const priceA = parsePrice(a.entry || a.price);
+      const priceB = parsePrice(b.entry || b.price);
+      if (priceA !== null && priceB !== null && priceA !== priceB) return priceA - priceB;
+      if (priceA !== null && priceB === null) return -1;
+      if (priceA === null && priceB !== null) return 1;
+      return new Date(b.filledAt || b.updatedAt || b.date || 0).getTime() - new Date(a.filledAt || a.updatedAt || a.date || 0).getTime();
+    });
 
   useEffect(() => {
     const anchorKeyFor = (anchor) => {
