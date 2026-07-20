@@ -215,6 +215,11 @@ const sumJournalNetPoints = (items) => {
   return items.reduce((sum, item) => sum + journalNetPoints(item), 0);
 };
 
+const journalEntryDisplay = (value) => {
+  const parsed = journalNumberOrNull(value);
+  return parsed && parsed > 0 ? fmtPrice(parsed) : "Needs entry";
+};
+
 const journalDateMs = (item) => {
   const raw = item?.createdAt || item?.created_at || item?.date;
   const parsed = new Date(raw).getTime();
@@ -2659,16 +2664,20 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     const aiEvidence = selectedTrade?.evidence || selectedTrade?.rawSignal?.evidence || form.evidence || [];
     const aiPayload = selectedTrade?.rawSignal || form.aiPayload || null;
     const aiTop = selectedTrade?.top || selectedTrade?.signalName || signalName || "AI Level";
+    const selectedEntry = firstDefined(form.tradeEntryPrice, selectedTrade?.entry, selectedTrade?.price, aiPayload?.entry, aiPayload?.price, "");
+    const selectedDirection = firstDefined(form.direction, selectedTrade?.direction, aiPayload?.direction, "Long");
+    const selectedGrade = isAiAnchor && selectedTrade?.grade ? selectedTrade.grade : (selectedTrade?.grade || grade(report.score)[0]);
+    const selectedScore = isAiAnchor && selectedTrade?.score ? selectedTrade.score : (selectedTrade?.score ?? report.score);
 
     return {
       id: extra.id || selectedTrade?.id || editingId || Date.now(),
       createdAt: extra.createdAt || selectedTrade?.createdAt || new Date().toISOString(),
       statsUpdatedAt: extra.statsUpdatedAt || selectedTrade?.statsUpdatedAt || selectedTrade?.verification?.statsUpdatedAt || null,
       date: extra.date || selectedTrade?.date || formatEastern(new Date()),
-      direction: form.direction,
-      entry: form.tradeEntryPrice,
-      grade: isAiAnchor && selectedTrade?.grade ? selectedTrade.grade : grade(report.score)[0],
-      score: isAiAnchor && selectedTrade?.score ? selectedTrade.score : report.score,
+      direction: selectedDirection,
+      entry: selectedEntry,
+      grade: selectedGrade,
+      score: selectedScore,
       result: normalizedResult,
       orderStatus: normalizedResult === "Unfilled" ? "Unfilled" : "Reported",
       pendingOrder: normalizedResult === "Unfilled",
@@ -2687,7 +2696,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
       signalName,
       evidence: aiEvidence,
       rawSignal: aiPayload,
-      formSnapshot: { ...form, evidence: aiEvidence, aiPayload }
+      formSnapshot: { ...form, tradeEntryPrice: String(selectedEntry || ""), direction: selectedDirection, evidence: aiEvidence, aiPayload }
     };
   };
 
@@ -2883,6 +2892,12 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
       !String(selectedTrade.id).startsWith("zone-")
     );
     const normalizedResult = form.result === "Edge" || form.result === "Unfilled" ? "Unfilled" : form.result;
+    const entryValue = journalNumberOrNull(form.tradeEntryPrice || selectedTrade?.entry || selectedTrade?.price);
+    const hasTradeAnchor = Boolean(selectedTrade?.id || selectedTrade?.entry || selectedTrade?.price);
+    if (!isEditingExisting && !hasTradeAnchor && (!entryValue || entryValue <= 0)) {
+      alert("Pick a setup or enter an entry price before saving a journal result.");
+      return;
+    }
     const editEvidence = selectedTrade?.evidence || selectedTrade?.formSnapshot?.evidence || selectedTrade?.rawSignal?.evidence || [];
     const item = isEditingExisting
       ? {
@@ -3573,6 +3588,8 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
 
     setSelectedTrade({
       ...anchor,
+      entry: entryValue,
+      direction: directionValue,
       sourceType: anchor.sourceType || "AI Signal",
       signal_id: anchor.signal_id || payload.id || "",
       signalName,
@@ -5880,6 +5897,8 @@ function Journal({ journal, totalJournalCount = 0, journalStats, journalFilter, 
                 <th>Dir</th>
                 <th>Grade</th>
                 <th>Result</th>
+                <th>Move</th>
+                <th>DD</th>
                 <th>Discount</th>
                 <th>Top Confluence</th>
                 <th>P/L</th>
@@ -5891,10 +5910,12 @@ function Journal({ journal, totalJournalCount = 0, journalStats, journalFilter, 
                 <React.Fragment key={j.id}>
                   <tr className="border-t border-zinc-800">
                     <td className="p-3">{j.date}</td>
-                    <td>{fmtPrice(j.entry)}</td>
+                    <td className={journalNumberOrNull(j.entry) > 0 ? "" : "font-black text-red-300"}>{journalEntryDisplay(j.entry)}</td>
                     <td>{j.direction}</td>
                     <td>{j.grade} {j.score}</td>
                     <td>{j.result}</td>
+                    <td className="font-black text-[#00d27a]">{j.maxMove || "--"}</td>
+                    <td className="font-black text-red-400">{j.maxDrawdown || "--"}</td>
                     <td>{j.discountPoints || "--"}</td>
                     <td>{j.top}</td>
                     <td>{j.profitLoss}</td>
@@ -5906,7 +5927,7 @@ function Journal({ journal, totalJournalCount = 0, journalStats, journalFilter, 
                     </td>
                   </tr>
                   <tr>
-                    <td colSpan="9" className="px-3 pb-5">
+                    <td colSpan="11" className="px-3 pb-5">
                       {j.notes && <div className="mb-3 text-zinc-400">{j.notes}</div>}
                       {j.tradeImages?.length > 0 && (
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
