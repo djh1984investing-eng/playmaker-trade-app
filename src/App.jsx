@@ -4811,6 +4811,44 @@ function sourceGroupName(sourceType = "") {
   return "Other";
 }
 
+function compactEvidenceLabel(item = {}) {
+  return String(item.label || item.sourceType || "Source")
+    .replace(/\s+\d+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactEvidencePriceText(prices = []) {
+  const unique = Array.from(new Set(prices.filter((price) => price !== null).map((price) => fmtPrice(price))));
+  if (!unique.length) return "--";
+  if (unique.length <= 3) return unique.join(", ");
+  return `${unique.slice(0, 3).join(", ")} +${unique.length - 3} more`;
+}
+
+function compactEvidenceRows(items = []) {
+  const rows = new Map();
+  items.forEach((item) => {
+    const price = parsePrice(item.price);
+    const label = compactEvidenceLabel(item);
+    const score = Number(item.evidenceScore ?? item.score ?? 0) || 0;
+    const scoreKey = String(Math.round(score * 100) / 100);
+    const key = `${label}|${scoreKey}`;
+    const current = rows.get(key) || { label, price, prices: [], count: 0, score: 0, rowScore: score };
+    current.count += 1;
+    current.score += score;
+    current.prices.push(price);
+    rows.set(key, current);
+  });
+  return Array.from(rows.values())
+    .sort((a, b) => b.score - a.score || b.count - a.count || String(a.label).localeCompare(String(b.label)))
+    .map((row) => ({
+      ...row,
+      label: row.count > 1 ? `${row.count}x ${row.label}` : row.label,
+      price: compactEvidencePriceText(row.prices),
+      evidenceScore: row.score
+    }));
+}
+
 function EvidenceList({ evidence = [] }) {
   if (!Array.isArray(evidence) || evidence.length === 0) {
     return <div className="mt-3 text-xs text-zinc-500">No source breakdown saved.</div>;
@@ -4831,9 +4869,9 @@ function EvidenceList({ evidence = [] }) {
           <div key={group}>
             <div className="text-[11px] font-black uppercase text-zinc-400">{group}</div>
             <div className="mt-1 space-y-1">
-              {items.map((item, idx) => (
+              {compactEvidenceRows(items).map((item, idx) => (
                 <div key={`${group}-${idx}`} className="flex items-start justify-between gap-2 text-xs text-zinc-300">
-                  <span>✓ {item.label || item.sourceType} @ {fmtPrice(item.price)}</span>
+                  <span>✓ {item.label || item.sourceType} @ {item.price}</span>
                   <span className="shrink-0 font-black text-[#00d27a]">+{Number(item.evidenceScore ?? item.score ?? 0).toFixed(0)}</span>
                 </div>
               ))}
