@@ -463,49 +463,6 @@ const isDiscordEligibleSignal = (anchor = null) => {
   return sourceType === "ai signal" || sourceType.includes("persistent level") || signalName.includes("stacked cluster");
 };
 
-const isBillingOrWhopNotice = ({ event = "", title = "", detail = "", anchor = null } = {}) => {
-  const text = [
-    event,
-    title,
-    detail,
-    anchor?.type,
-    anchor?.event,
-    anchor?.source,
-    anchor?.sourceType,
-    anchor?.source_type,
-    anchor?.signalName,
-    anchor?.customer,
-    anchor?.email,
-    anchor?.payment,
-    anchor?.subscription,
-    anchor?.invoice,
-    anchor?.checkout,
-    anchor?.rawSignal?.type,
-    anchor?.rawSignal?.event,
-    anchor?.rawSignal?.source,
-    anchor?.payload?.type,
-    anchor?.payload?.event,
-    anchor?.payload?.source
-  ].map((value) => String(value || "").toLowerCase()).join(" ");
-
-  return [
-    "whop",
-    "payment",
-    "paid",
-    "checkout",
-    "invoice",
-    "billing",
-    "subscription",
-    "customer",
-    "receipt",
-    "refund",
-    "charge",
-    "card",
-    "trial",
-    "plan_"
-  ].some((word) => text.includes(word));
-};
-
 const loadStoredNoticeKeys = () => {
   try {
     if (typeof window === "undefined") return {};
@@ -932,7 +889,6 @@ useEffect(() => {
   const sendDiscordBoardNotice = async ({ event, title = "Playmaker Signal", detail = "", anchor = null }) => {
     if (!ownerMode || !user) return;
     if (Date.now() < suppressDiscordUntilRef.current) return;
-    if (isBillingOrWhopNotice({ event, title, detail, anchor })) return;
     if (!anchor || isManualAnchor(anchor) || !isDiscordEligibleSignal(anchor)) return;
 
     const dedupeKey = `DISCORD|${discordNoticeKey({ event, title, detail, anchor })}`;
