@@ -52,6 +52,7 @@ const isOwnerUser = (user) => {
 const navTabs = [
   { id: "trade", label: "Trade Info" },
   { id: "procedure", label: "Procedure" },
+  { id: "pulled", label: "Pulled Orders" },
   { id: "checklist", label: "Setup Checklist" },
   { id: "settings", label: "AI Settings", ownerOnly: true },
   { id: "behavior", label: "Behavior" },
@@ -4365,6 +4366,30 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
         </div>
 
         {tab === "procedure" && <Procedure />}
+
+        {tab === "pulled" && (
+          <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Pulled Orders</div>
+                <p className="mt-1 text-sm text-zinc-400">Cards you pulled from the board stay here so you can review, restore, journal, or delete them later.</p>
+              </div>
+              {ownerMode && pulledAnchors.length > 0 && (
+                <button onClick={restorePulledAiCards} className="rounded-xl border border-[#00d27a] px-4 py-2 text-sm font-black text-[#00d27a] hover:bg-[#001f14]">
+                  Restore All Pulled Cards
+                </button>
+              )}
+            </div>
+
+            {pulledAnchors.length > 0 ? (
+              <LevelSection title="Pulled Cards" subtitle={`${pulledAnchors.length} pulled card${pulledAnchors.length === 1 ? "" : "s"} saved off the main board.`} items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
+            ) : (
+              <div className="mt-5 rounded-2xl border border-zinc-800 bg-[#090909] p-6 text-sm text-zinc-400">
+                No pulled cards saved right now. When you hit Pull From Board, that card will show here.
+              </div>
+            )}
+          </div>
+        )}
 
         {tab === "trade" && (
           <>
