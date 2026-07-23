@@ -52,7 +52,7 @@ const isOwnerUser = (user) => {
 const navTabs = [
   { id: "trade", label: "Trade Info" },
   { id: "procedure", label: "Procedure" },
-  { id: "pulled", label: "Pulled Orders" },
+  { id: "pulled", label: "App Removed" },
   { id: "checklist", label: "Setup Checklist" },
   { id: "settings", label: "AI Settings", ownerOnly: true },
   { id: "behavior", label: "Behavior" },
@@ -807,6 +807,7 @@ useEffect(() => {
   const [submittedAnchorKeys, setSubmittedAnchorKeys] = useState({});
   const [filledAnchorKeys, setFilledAnchorKeys] = useState({});
   const [pulledAnchorKeys, setPulledAnchorKeys] = useState({});
+  const [autoRemovedAnchorKeys, setAutoRemovedAnchorKeys] = useState({});
   const [ownerSignalNotes, setOwnerSignalNotes] = useState({});
 
   const previousAnchorMapRef = useRef(null);
@@ -1114,6 +1115,26 @@ useEffect(() => {
       localStorage.setItem("playmaker_pulled_anchor_keys", JSON.stringify(pulledAnchorKeys));
     } catch (_err) {}
   }, [pulledAnchorKeys, ownerMode]);
+
+  useEffect(() => {
+    if (!user) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem("playmaker_auto_removed_anchor_keys") || "{}");
+      if (ownerMode && saved && typeof saved === "object") {
+        setAutoRemovedAnchorKeys(saved);
+      } else if (!ownerMode) {
+        localStorage.removeItem("playmaker_auto_removed_anchor_keys");
+        setAutoRemovedAnchorKeys({});
+      }
+    } catch (_err) {}
+  }, [user, ownerMode]);
+
+  useEffect(() => {
+    if (!ownerMode) return;
+    try {
+      localStorage.setItem("playmaker_auto_removed_anchor_keys", JSON.stringify(autoRemovedAnchorKeys));
+    } catch (_err) {}
+  }, [autoRemovedAnchorKeys, ownerMode]);
 
   // Global verification/note sync from Supabase.
   // This keeps Mr. DJ Harrison verification badges and owner notes visible
@@ -3572,6 +3593,29 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
     }, ...prev].slice(0, 50));
   };
 
+  const removeAutoRemovedAnchor = (anchor) => {
+    if (!anchor) return;
+    const key = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchorPriceKey(anchor.entry || anchor.price)}`;
+    setAutoRemovedAnchorKeys((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      delete next[anchorSubmitKey(anchor)];
+      return next;
+    });
+  };
+
+  const clearAutoRemovedCards = () => {
+    if (!ownerMode) return;
+    setAutoRemovedAnchorKeys({});
+    setNotificationLog((prev) => [{
+      key: `CLEAR-AUTO-REMOVED-${Date.now()}`,
+      kind: "RESTORED",
+      title: "App removed cards cleared",
+      detail: `Automatic removed-card list cleared - ${formatEastern(new Date())}`,
+      createdAt: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+  };
+
   const submitAnchorToJournal = async (anchor, scope = "global") => {
     if (!anchor) return;
     {
@@ -3840,6 +3884,22 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
       return acc;
     }, [])
     .filter((anchor) => !submittedRecordForAnchor(anchor));
+
+  const autoRemovedAnchors = Object.values(autoRemovedAnchorKeys)
+    .map((record) => record?.anchorSnapshot)
+    .filter(Boolean)
+    .filter((anchor) => !isManualOrder(anchor))
+    .reduce((acc, anchor) => {
+      const key = `${String(anchor.direction || "BOTH").toUpperCase()}|${anchorPriceKey(anchor.entry || anchor.price)}`;
+      if (!acc.some((item) => `${String(item.direction || "BOTH").toUpperCase()}|${anchorPriceKey(item.entry || item.price)}` === key)) acc.push(anchor);
+      return acc;
+    }, [])
+    .sort((a, b) => {
+      const priceA = parsePrice(a.entry || a.price);
+      const priceB = parsePrice(b.entry || b.price);
+      if (priceA !== null && priceB !== null && priceA !== priceB) return priceB - priceA;
+      return new Date(b.autoRemovedAt || b.updatedAt || b.date || 0).getTime() - new Date(a.autoRemovedAt || a.updatedAt || a.date || 0).getTime();
+    });
 
   const anchorMarketDistance = (anchor) => {
     if (latestKnownMarketPrice === null) return null;
@@ -4113,6 +4173,18 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
       if (!seenNotificationKeys[key]) {
         const detail = `${directionText} ${priceText} • Grade ${gradeText} • Sources ${sources} • removed from board • ${formatEastern(new Date())}`;
         newNotices.push({ key, kind: "REMOVED", title: "Playmaker Signal Removed", detail, anchor: oldAnchor, createdAt: new Date().toISOString(), voice: "play maker set up removed" });
+        setAutoRemovedAnchorKeys((prev) => ({
+          ...prev,
+          [anchorKey]: {
+            removedAt: new Date().toISOString(),
+            reason: detail,
+            anchorSnapshot: {
+              ...oldAnchor,
+              autoRemoved: true,
+              autoRemovedAt: new Date().toISOString()
+            }
+          }
+        }));
       }
       pendingRemovedMap.delete(anchorKey);
     });
@@ -4371,22 +4443,26 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
-                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">Pulled Orders</div>
-                <p className="mt-1 text-sm text-zinc-400">Cards you pulled from the board stay here so you can review, restore, journal, or delete them later.</p>
+                <div className="text-sm font-black uppercase tracking-[0.22em] text-[#ffcc19]">App Removed Cards</div>
+                <p className="mt-1 text-sm text-zinc-400">Cards the app removed from the main board are parked here so you can pull them back up and review what happened.</p>
               </div>
-              {ownerMode && pulledAnchors.length > 0 && (
-                <button onClick={restorePulledAiCards} className="rounded-xl border border-[#00d27a] px-4 py-2 text-sm font-black text-[#00d27a] hover:bg-[#001f14]">
-                  Restore All Pulled Cards
+              {ownerMode && autoRemovedAnchors.length > 0 && (
+                <button onClick={clearAutoRemovedCards} className="rounded-xl border border-zinc-700 px-4 py-2 text-sm font-black text-zinc-300 hover:border-[#ffcc19] hover:text-white">
+                  Clear App Removed List
                 </button>
               )}
             </div>
 
-            {pulledAnchors.length > 0 ? (
-              <LevelSection title="Pulled Cards" subtitle={`${pulledAnchors.length} pulled card${pulledAnchors.length === 1 ? "" : "s"} saved off the main board.`} items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
+            {autoRemovedAnchors.length > 0 ? (
+              <LevelSection title="App Removed Cards" subtitle={`${autoRemovedAnchors.length} card${autoRemovedAnchors.length === 1 ? "" : "s"} the app removed from the active board.`} items={autoRemovedAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={removeAutoRemovedAnchor} onDeletePulledAnchor={removeAutoRemovedAnchor} mode="autoRemoved" />
             ) : (
               <div className="mt-5 rounded-2xl border border-zinc-800 bg-[#090909] p-6 text-sm text-zinc-400">
-                No pulled cards saved right now. When you hit Pull From Board, that card will show here.
+                No app-removed cards saved right now. When the app removes a setup from the main board, it will show here.
               </div>
+            )}
+
+            {pulledAnchors.length > 0 && (
+              <LevelSection title="Manual Pulled Orders" subtitle={`${pulledAnchors.length} card${pulledAnchors.length === 1 ? "" : "s"} you manually pulled from the board.`} items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
             )}
           </div>
         )}
@@ -4442,7 +4518,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
           </div>
         </div>
 
-        {(activeAnchors.length > 0 || filledManagingLevels.length > 0 || outOfRangeAiAnchors.length > 0 || pulledAnchors.length > 0) && (
+        {(activeAnchors.length > 0 || filledManagingLevels.length > 0 || outOfRangeAiAnchors.length > 0 || pulledAnchors.length > 0 || autoRemovedAnchors.length > 0) && (
           <div className="mt-6 rounded-3xl border border-[#ffcc19] bg-black p-5 shadow-xl shadow-yellow-950/20">
             <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
@@ -4457,7 +4533,7 @@ const exportJournalCSV = (rowsToExport = filteredJournal) => {
             <LevelSection title="Watch Levels" subtitle="C levels: repeat prices and early confluence worth monitoring." items={watchLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
             <LevelSection title="Filled / Managing" subtitle="Filled cards move here so the main board can keep scanning. Submit to journal when you are done managing the trade." items={filledManagingLevels} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} mode="filled" />
             <LevelSection title="Out of Range / Waiting" subtitle={`Good confluence more than ${maxOrderCardDistancePoints.toLocaleString()} pts from latest known price. It auto-returns when price comes back and the stack still qualifies.`} items={outOfRangeAiAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} />
-            <LevelSection title="Pulled Orders" subtitle="Cards pulled off the main board. Restore them if the limit is still good, or journal/delete them later." items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
+            <LevelSection title="Manual Pulled Orders" subtitle="Cards you manually pulled off the main board. Restore them if the limit is still good, or journal/delete them later." items={pulledAnchors} selectedTrade={selectedTrade} onSelect={selectActiveAnchor} ownerMode={ownerMode} verifiedAnchors={verifiedAnchors} onVerify={verifyAnchor} onUnverify={removeAnchorVerification} onSubmitAnchor={submitAnchorToJournal} filledAnchorKeys={filledAnchorKeys} onMarkFilled={markAnchorFilled} onDismissAnchor={dismissAnchorFromBoard} onRestoreAnchor={restorePulledAnchor} onDeletePulledAnchor={deletePulledAnchor} mode="pulled" />
           </div>
         )}
 
@@ -4980,6 +5056,7 @@ function EvidenceList({ evidence = [] }) {
 function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifiedAnchors = {}, onVerify, onUnverify, onSubmitAnchor, filledAnchorKeys = {}, onMarkFilled, onDismissAnchor, onRestoreAnchor, onDeletePulledAnchor, mode = "active" }) {
   const isAi = anchor.sourceType === "AI Signal";
   const isPulled = mode === "pulled" || anchor.pulled;
+  const isAutoRemoved = mode === "autoRemoved" || anchor.autoRemoved;
   const isFilledMode = mode === "filled" || anchor.filledLocked;
   const evidence = anchor.evidence || anchor.rawSignal?.evidence || [];
   const selected = selectedTrade?.id === anchor.id;
@@ -5266,7 +5343,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
       )}
 
       <div className="mt-3 grid gap-2" onClick={(e) => e.stopPropagation()}>
-        {isPulled && (
+        {(isPulled || isAutoRemoved) && (
           <>
             {ownerMode && (
               <>
@@ -5274,13 +5351,13 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
               onClick={() => onRestoreAnchor?.(anchor)}
               className="w-full rounded-lg bg-[#00d27a] px-3 py-2 text-xs font-black text-black hover:bg-[#36ff9f]"
             >
-              Restore To Board
+              {isAutoRemoved ? "Remove From App Removed List" : "Restore To Board"}
             </button>
             <button
               onClick={() => onDeletePulledAnchor?.(anchor)}
               className="w-full rounded-lg border border-red-500 px-3 py-2 text-xs font-black text-red-400 hover:bg-red-950/30"
             >
-              Delete From Pulled Orders
+              {isAutoRemoved ? "Delete From App Removed List" : "Delete From Pulled Orders"}
             </button>
               </>
             )}
@@ -5300,7 +5377,7 @@ function LevelCard({ anchor, selectedTrade, onSelect, ownerMode = false, verifie
             )}
           </>
         )}
-        {!isPulled && (
+        {!isPulled && !isAutoRemoved && (
           <>
         {(ownerMode || !isAi) && !isFilledMode && (
         <button
